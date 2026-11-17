@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>MovieShazam — Zero to Hero Guide</title>
+<style>
+  @page { size: A4; margin: 18mm 16mm 20mm 16mm; }
+  :root {
+    --ink: #1b2330; --muted: #5b6676; --line: #d9dee7; --accent: #c98a12; --accent-soft: #fdf3dd;
+    --blue: #1d5fa8; --blue-soft: #e8f0fb; --green: #1f7a4d; --green-soft: #e6f4ec; --red: #a83232; --red-soft: #fbeaea;
+    --code-bg: #f4f6f9;
+  }
+  * { box-sizing: border-box; }
+  html { font-size: 10.4pt; }
+  body { font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif; color: var(--ink); line-height: 1.55; margin: 0; }
+  h1, h2, h3, h4 { font-family: "Segoe UI Semibold", "Segoe UI", Arial, sans-serif; line-height: 1.25; color: #0f1724; }
+  h1.chapter { font-size: 24pt; margin: 0 0 4mm; padding-top: 2mm; break-before: page; border-bottom: 3px solid var(--accent); padding-bottom: 3mm; }
+  h1.chapter .num { color: var(--accent); margin-right: 3mm; }
+  h2 { font-size: 15pt; margin: 7mm 0 2.5mm; break-after: avoid; }
+  h3 { font-size: 12pt; margin: 5mm 0 2mm; break-after: avoid; }
+  h4 { font-size: 10.6pt; margin: 4mm 0 1.5mm; break-after: avoid; }
+  p { margin: 0 0 2.6mm; text-align: justify; hyphens: auto; }
+  ul, ol { margin: 0 0 3mm 0; padding-left: 6mm; }
+  li { margin-bottom: 1mm; }
+  a { color: var(--blue); text-decoration: none; }
+  strong { color: #0b1220; }
+  code { font-family: "Cascadia Mono", Consolas, "Courier New", monospace; font-size: 9pt; background: var(--code-bg); padding: 0.2mm 1.2mm; border-radius: 1mm; }
+  pre { font-family: "Cascadia Mono", Consolas, "Courier New", monospace; font-size: 8.4pt; line-height: 1.45; background: #0f1724; color: #e6edf6;
+        padding: 3.5mm 4mm; border-radius: 2mm; overflow: hidden; white-space: pre-wrap; break-inside: avoid; margin: 2mm 0 4mm; }
+  pre .c { color: #8fa3bf; } pre .k { color: #f5c46b; } pre .s { color: #9fdba6; }
+  table { width: 100%; border-collapse: collapse; margin: 2mm 0 4mm; font-size: 9.2pt; break-inside: avoid; }
+  th { text-align: left; background: #eef1f6; font-weight: 600; }
+  th, td { border: 1px solid var(--line); padding: 1.4mm 2mm; vertical-align: top; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .box { border-radius: 2mm; padding: 3mm 4mm; margin: 3mm 0 4mm; break-inside: avoid; border-left: 4px solid; }
+  .box h4 { margin-top: 0; }
+  .box p:last-child, .box ul:last-child { margin-bottom: 0; }
+  .key { background: var(--accent-soft); border-color: var(--accent); }
+  .info { background: var(--blue-soft); border-color: var(--blue); }
+  .good { background: var(--green-soft); border-color: var(--green); }
+  .warn { background: var(--red-soft); border-color: var(--red); }
+  .box .tag { font-size: 8pt; text-transform: uppercase; letter-spacing: 0.08em; font-weight: 700; display: block; margin-bottom: 1mm; }
+  .key .tag { color: var(--accent); } .info .tag { color: var(--blue); } .good .tag { color: var(--green); } .warn .tag { color: var(--red); }
+  figure { margin: 3mm 0 5mm; text-align: center; break-inside: avoid; }
+  figure img { max-width: 100%; border: 1px solid var(--line); border-radius: 1.5mm; }
+  figure svg { max-width: 100%; height: auto; }
+  figcaption { font-size: 8.6pt; color: var(--muted); margin-top: 1.5mm; }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 5mm; }
+  .muted { color: var(--muted); }
+  .small { font-size: 8.8pt; }
+  .qa { break-inside: avoid; margin-bottom: 3.5mm; }
+  .qa .q { font-weight: 600; color: #0f1724; }
+  .qa .q::before { content: "Q. "; color: var(--accent); }
+  .qa .a::before { content: "A. "; font-weight: 700; color: var(--green); }
+  .toc { columns: 2; column-gap: 8mm; font-size: 10pt; }
+  .toc ol { padding-left: 5mm; }
+  .toc li { break-inside: avoid; }
+  .formula { font-family: "Cambria Math", Cambria, Georgia, serif; font-size: 11pt; text-align: center; margin: 2mm 0 3mm; }
+  .pill { display: inline-block; font-size: 8pt; padding: 0.3mm 2mm; border-radius: 10mm; background: #eef1f6; color: var(--muted); margin-right: 1mm; }
+  /* cover */
+  .cover { height: 255mm; display: flex; flex-direction: column; justify-content: space-between; padding: 8mm 4mm; }
+  .cover .brand { font-size: 11pt; color: var(--accent); font-weight: 700; letter-spacing: 0.18em; text-transform: uppercase; }
+  .cover h1 { font-size: 40pt; margin: 6mm 0 2mm; border: none; }
+  .cover .sub { font-size: 15pt; color: var(--muted); max-width: 150mm; }
+  .cover .meta { font-size: 10pt; color: var(--muted); border-top: 1px solid var(--line); padding-top: 4mm; }
+  .cover-art { margin: 10mm 0; }
+</style>
+</head>
+<body>
+
+<section class="cover">
+  <div>
+    <div class="brand">MovieShazam · learning guide</div>
+    <h1>From Zero to Hero</h1>
+    <p class="sub">Everything you need to truly understand the project: video, perceptual hashing, search indexes,
+      temporal alignment, parallel &amp; concurrent programming in Python, SQLite, FastAPI, Next.js, testing and
+      benchmarking — explained from first principles, then mapped onto the real code.</p>
+  </div>
+  <div class="cover-art">
+    <svg viewBox="0 0 640 170" xmlns="http://www.w3.org/2000/svg" font-family="Segoe UI, Arial" font-size="12">
+      <defs><marker id="ar" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#c98a12"/></marker></defs>
+      <g fill="#fff" stroke="#1b2330" stroke-width="1.2">
+        <rect x="5" y="55" width="105" height="60" rx="8"/><rect x="135" y="55" width="105" height="60" rx="8"/>
+        <rect x="265" y="55" width="105" height="60" rx="8"/><rect x="395" y="55" width="105" height="60" rx="8"/>
+        <rect x="525" y="55" width="110" height="60" rx="8" fill="#fdf3dd" stroke="#c98a12"/>
+      </g>
+      <g text-anchor="middle" fill="#1b2330">
+        <text x="57" y="80" font-weight="600">10-second clip</text><text x="57" y="98" fill="#5b6676">MP4 from anywhere</text>
+        <text x="187" y="80" font-weight="600">FFmpeg decode</text><text x="187" y="98" fill="#5b6676">64×64 gray frames</text>
+        <text x="317" y="80" font-weight="600">pHash 64-bit</text><text x="317" y="98" fill="#5b6676">one per frame</text>
+        <text x="447" y="80" font-weight="600">Index + vote</text><text x="447" y="98" fill="#5b6676">bands, offsets</text>
+        <text x="580" y="80" font-weight="600">"Film X"</text><text x="580" y="98" fill="#5b6676">at 00:42:13</text>
+      </g>
+      <g stroke="#c98a12" stroke-width="2" marker-end="url(#ar)">
+        <line x1="110" y1="85" x2="131" y2="85"/><line x1="240" y1="85" x2="261" y2="85"/>
+        <line x1="370" y1="85" x2="391" y2="85"/><line x1="500" y1="85" x2="521" y2="85"/>
+      </g>
+      <text x="320" y="150" text-anchor="middle" fill="#5b6676">Everything runs on one PC: processes for CPU work, threads for everything that waits.</text>
+    </svg>
+  </div>
+  <div class="meta">
+    Module « Systèmes distribués et parallèles » — ISAMM 2026–2027 · Companion to the MovieShazam repository.<br>
+    Every number quoted in this guide was measured on the development PC (AMD Ryzen 5 5600H, 6 cores / 12 threads,
+    8 GB single-channel RAM, Windows 11, Python 3.12, FFmpeg 9.0.2). Nothing is invented.
+  </div>
+</section>

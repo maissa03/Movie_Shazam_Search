@@ -1,0 +1,132 @@
+<h1 class="chapter"><span class="num">8</span>Persistence with SQLite</h1>
+
+<h2>8.1 Why SQLite</h2>
+<p>SQLite is a full SQL database stored in <strong>one file</strong> (<code>data/movieshazam.db</code>), with no server to install. It
+supports transactions, foreign keys, unique constraints and B-tree indexes — everything we need for a local application.
+We use it through <strong>SQLAlchemy 2</strong> (Python ORM): tables are Python classes in <code>backend/app/db/models.py</code>,
+and <code>Base.metadata.create_all()</code> creates missing tables at startup (documented schema initialization).</p>
+
+<h2>8.2 The schema</h2>
+<table>
+<tr><th>Table</th><th>Role and key columns</th></tr>
+<tr><td><code>movies</code></td><td>One row per film: title, year, <code>stored_name</code> (relative file name, never an absolute path), size, mtime, SHA-256, duration, resolution, codec, status, <code>index_version</code>, segment counters.</td></tr>
+<tr><td><code>segments</code></td><td>One row per work unit: start/end, status (pending/done/failed), fingerprints count, processing time, worker PID, error. <code>UNIQUE(movie_id, index_version, start_ms)</code>.</td></tr>
+<tr><td><code>fingerprints</code></td><td>One row per sampled frame: timestamp, 8-byte hash BLOB, informativeness, algorithm version. <code>UNIQUE(movie_id, timestamp_ms, algorithm_version)</code>.</td></tr>
+<tr><td><code>fingerprint_bands</code></td><td>(band_index, band_value, fingerprint_id) as a <code>WITHOUT ROWID</code> table: its primary key <em>is</em> the search index.</td></tr>
+<tr><td><code>jobs</code>, <code>searches</code>, <code>benchmarks</code></td><td>History of processing jobs, search results (full JSON), benchmark measurements.</td></tr>
+</table>
+
+<h2>8.3 Transactions and constraints: integrity by construction</h2>
+<ul>
+  <li>Each write function runs inside <strong>one transaction</strong>: inserting a segment's 360 fingerprints, their 1,440 band rows
+  and the progress counters either all happen or none does.</li>
+  <li>The UNIQUE constraint makes duplicate fingerprints <strong>impossible</strong> (tested: a duplicate insert raises and rolls back
+  the whole transaction). Saving a segment first deletes that segment's previous rows, so re-running it is idempotent.</li>
+  <li><strong>Foreign keys with ON DELETE CASCADE</strong>: deleting a film deletes its segments → fingerprints → bands in one statement.</li>
+  <li><strong>Versioning</strong>: the effective index version is <code>phash-v1@2fps</code>. If the algorithm or the sampling rate
+  changes, old segments are wiped before re-indexing; two incompatible versions are never mixed (tested).</li>
+  <li><code>finalize_index</code> refuses to mark a film <code>indexed</code> unless every segment is done and the fingerprint count matches;
+  search only ever uses films whose status is <code>indexed</code>.</li>
+</ul>
+
+<h2>8.4 WAL mode and the single-writer rule</h2>
+<p>SQLite allows many readers but only <strong>one writer at a time</strong>. In the default journal mode, a writer also blocks readers.
+In <strong>WAL</strong> (write-ahead log) mode, readers keep reading a consistent snapshot while the writer appends to the log. So:
+reads (API pages, candidate search) run in any thread with their own short session; all writes go through the single writer thread.
+Worker processes never open the database at all.</p>
+
+<h2>8.5 Incremental indexing, in practice</h2>
+<table>
+<tr><th>Situation</th><th>What happens</th></tr>
+<tr><td>Same file uploaded again</td><td>SHA-256 already known → existing film returned, nothing recomputed.</td></tr>
+<tr><td>Re-index an indexed, unchanged film</td><td>"Index already up to date" (HTTP 200, no job). <code>force=true</code> recomputes everything.</td></tr>
+<tr><td>Indexing cancelled or failed half-way</td><td>Done segments are kept; re-indexing computes only the missing ones (<code>segments_reused</code>).</td></tr>
+<tr><td>File deleted from disk</td><td>Detected at startup → index invalidated, film marked failed with an explicit message.</td></tr>
+<tr><td>File modified (different content)</td><td>Size/mtime changed → SHA-256 recomputed → index cleared, film back to pending.</td></tr>
+<tr><td>App killed during indexing</td><td>At restart, interrupted jobs are marked failed ("interrupted by shutdown"); re-indexing resumes from saved segments.</td></tr>
+</table>
+
+<!-- ===================================================================== -->
+<h1 class="chapter"><span class="num">9</span>The web layer: FastAPI and Next.js</h1>
+
+<h2>9.1 REST in two minutes</h2>
+<p>The browser and the backend exchange JSON over HTTP. Resources have URLs (<code>/api/movies/3</code>) and verbs say what to do:
+<code>GET</code> reads, <code>POST</code> creates or triggers, <code>PATCH</code> modifies, <code>DELETE</code> removes. Status codes carry meaning:
+200 OK, <strong>202 Accepted</strong> (work started, not finished), 404 not found, 413 too large, 422 invalid input, 503 busy.</p>
+
+<h2>9.2 FastAPI</h2>
+<ul>
+  <li>Endpoints are plain <code>def</code> functions: FastAPI runs each request in a <strong>worker thread</strong> of its thread pool, so a slow
+  request (copying a large upload) never prevents others (polling) from being served.</li>
+  <li><strong>Pydantic</strong> models validate inputs (e.g. year between 1870 and 2100) and describe outputs. The interactive
+  documentation at <code>/docs</code> is generated automatically from them.</li>
+  <li>Synchronous <strong>startup / shutdown handlers</strong> start and stop everything in a safe order (DB → writer → cleanup → library check →
+  process pool → I/O threads → job manager; reverse order on shutdown).</li>
+  <li>Long work answers <strong>202 + job id</strong> immediately; the client then <strong>polls</strong>. No HTTP request stays open for minutes,
+  and no WebSocket is needed.</li>
+</ul>
+<table>
+<tr><th>Route</th><th>Behaviour</th></tr>
+<tr><td><code>GET /api/health</code></td><td>Backend, SQLite, FFmpeg, pool PIDs, limits.</td></tr>
+<tr><td><code>GET/POST /api/movies</code>, <code>GET/PATCH/DELETE /api/movies/{id}</code></td><td>Library: list (search, sort, filter), import (202 + job), detail with segments, edit title/year, consistent deletion.</td></tr>
+<tr><td><code>POST /api/movies/{id}/reindex</code></td><td>Incremental re-index (<code>?force=true</code> to recompute).</td></tr>
+<tr><td><code>POST /api/search</code>, <code>GET /api/search/{id}</code></td><td>Upload a clip (202), then read status and result.</td></tr>
+<tr><td><code>GET /api/jobs</code>, <code>GET /api/jobs/{id}</code>, <code>POST /api/jobs/{id}/cancel</code></td><td>Processing jobs and cooperative cancellation.</td></tr>
+<tr><td><code>GET /api/benchmarks</code>, <code>POST /api/benchmarks/run</code>, <code>GET /api/benchmarks/export</code></td><td>Measurements, launch, CSV/JSON export.</td></tr>
+<tr><td><code>GET /api/media/{id}/thumbnail|frame|video</code></td><td>Images and video of managed films only (Range requests for seeking).</td></tr>
+</table>
+
+<h2>9.3 Security on a local app still matters</h2>
+<ul>
+  <li><strong>Path traversal</strong>: the browser never sends or receives file paths, only numeric ids. <code>safe_child()</code> resolves
+  the canonical path and refuses anything outside <code>data/media</code> (no <code>../</code>, no absolute paths, no symlinks going out).</li>
+  <li><strong>Command injection</strong>: subprocess argument lists, never <code>shell=True</code>.</li>
+  <li><strong>Upload limits</strong>: an early middleware rejects oversized <code>Content-Length</code> (413); the copy itself also stops at the limit;
+  free disk space is checked; extensions are whitelisted; ffprobe must find a real video stream.</li>
+  <li><strong>Network exposure</strong>: the server binds to <code>127.0.0.1</code> only (the settings refuse <code>0.0.0.0</code>); CORS
+  allows only the local frontend origin.</li>
+  <li><strong>Atomic file operations</strong>: uploads are written to a temporary <code>.part</code> file, then renamed with
+  <code>os.replace</code> (atomic on the same volume); leftovers are cleaned at startup.</li>
+</ul>
+
+<h2>9.4 Next.js and the frontend</h2>
+<p>The UI is a <strong>Next.js App Router</strong> application in TypeScript with Tailwind CSS. Each folder under <code>frontend/app/</code> is a
+route: <code>/</code> (dashboard), <code>/bibliotheque</code>, <code>/bibliotheque/[id]</code>, <code>/reconnaissance</code>, <code>/traitements</code>,
+<code>/performances</code>. Pages are <em>client components</em> (<code>"use client"</code>) because they show live data fetched from the API.</p>
+<ul>
+  <li><code>lib/api.ts</code>: a <strong>typed client</strong> mirroring the Pydantic schemas (<code>lib/types.ts</code>). Uploads use
+  <code>XMLHttpRequest</code> because, unlike <code>fetch</code>, it reports upload progress.</li>
+  <li><code>lib/usePolling.ts</code>: a hook that calls a function every N ms <em>one request at a time</em> (chained timeouts, not
+  <code>setInterval</code>) and stops on unmount or when a job ends.</li>
+  <li>Next.js never decodes video or computes hashes: it only displays synthetic data (no list of fingerprints is ever sent to the browser).</li>
+</ul>
+
+<figure><img src="../screenshots/film_detail.png" alt="Film detail page" style="max-height:115mm">
+<figcaption>Figure 5 — Film detail: the segment map is coloured by the PID of the process that computed each segment (two workers alternate).</figcaption></figure>
+
+<!-- ===================================================================== -->
+<h1 class="chapter"><span class="num">10</span>Testing strategy and the synthetic corpus</h1>
+
+<h2>10.1 Why generate our own videos</h2>
+<p>The assignment forbids putting copyrighted films in the repository and requires real, reproducible data.
+<code>scripts/generate_demo_videos.py</code> renders films frame by frame from a <strong>seed</strong> (same seed → same frames) and pipes
+them into FFmpeg: moving textures with camera pans and zooms, geometric scenes, stripes, star fields — plus the hard cases on
+purpose: 1 s of black at the start, a <strong>studio logo shared by every film</strong>, a <strong>dark scene</strong>, a scene
+<strong>repeated</strong> inside film A, a passage <strong>copied</strong> from film B into film D, scrolling credits, and two films that are
+never indexed. Clips are then cut and transformed with FFmpeg, and <code>ground_truth.json</code> records the true film, start, end,
+transformation and split (validation/test).</p>
+
+<h2>10.2 The test pyramid (73 tests)</h2>
+<table>
+<tr><th>Level</th><th>Files</th><th>What they prove</th></tr>
+<tr><td>Unit (pure logic)</td><td><code>test_fingerprint.py</code>, <code>test_matching.py</code>, <code>test_band_index.py</code>, <code>test_db.py</code></td>
+<td>pHash spec bit-for-bit, Hamming, 64-bit storage extremes; offset found from a random start; a few look-alike frames or a shuffled clip are rejected; ambiguity detected; pigeonhole guarantees and measured false negatives; no duplicates; no version mixing; incomplete index never marked indexed.</td></tr>
+<tr><td>Real video</td><td><code>test_segmentation.py</code></td><td>Segmented decoding equals whole-file decoding; overlap is deduplicated; sampled instants are the right ones (frame-number video); shell-character filenames are safe.</td></tr>
+<tr><td>Concurrency</td><td><code>test_concurrency.py</code></td><td>Real race condition without a lock; Lock and single writer fix it; writer drains on close and is bounded; KeyedLocks; FFmpeg killed on early stop and on timeout; truncated file fails explicitly; <strong>sequential == parallel</strong> with 2 distinct PIDs; <strong>no asyncio anywhere in the application code</strong> (source scan).</td></tr>
+<tr><td>Integration (API)</td><td><code>test_api.py</code>, <code>test_demo_corpus.py</code></td><td>Index two films through the API with 2 processes; recognize every clip within ±1 s; unknown rejected; repeat import = no recompute; FFmpeg failure → failed + API responsive; restart keeps the index; delete is consistent; cancel then resume; full demo corpus, both search methods; oversized uploads refused with 413 <em>before</em> being read (per-route limits); 4 threads polling during an indexing always see consistent progress; after a restart the job read from the database is in its final state.</td></tr>
+<tr><td>End-to-end</td><td><code>test_e2e.py</code></td><td>A real Edge browser drives Next.js → FastAPI → engine → SQLite and reads the result on screen; graceful shutdown leaves no orphan process.</td></tr>
+</table>
+
+<div class="box key"><span class="tag">Key idea</span>
+<p>No test of decoding or recognition uses mocks: they all run FFmpeg on real generated videos. Thresholds were tuned on the
+validation split only, and the final numbers come from the untouched test split.</p></div>

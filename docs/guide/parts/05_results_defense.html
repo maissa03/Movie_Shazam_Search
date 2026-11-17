@@ -1,0 +1,270 @@
+<h1 class="chapter"><span class="num">11</span>Benchmarks and what they really show</h1>
+
+<h2>11.1 Method (what makes a benchmark honest)</h2>
+<ul>
+  <li><strong>Same corpus, same tasks, same function</strong> for every mode: 4 films, 345 s of 1280×720 video, 30 segments,
+  <code>analyze_segment</code>. Only the executor changes (a loop, or a pool of 1, 2, 4 processes).</li>
+  <li><strong>Pool started and warmed up outside the timed region</strong> (process start-up is measured separately).</li>
+  <li><strong>Warm cache</strong>: every file is read once before measuring, so all modes read from the OS disk cache. A true
+  "cold" measurement would need to flush Windows' cache (admin rights); we state it instead of faking it.</li>
+  <li><strong>3 repetitions, rotating the order of modes</strong>, median reported. Timing with <code>time.perf_counter()</code>.</li>
+  <li>Compute time and SQLite write time measured separately; writes go to a <strong>throw-away database</strong> so the real index is
+  never reused or modified.</li>
+  <li>A sampler thread records peak RAM (process tree) and CPU usage; the fingerprints of every mode are compared with the
+  sequential ones (<code>identical_to_sequential</code>).</li>
+</ul>
+
+<h2>11.2 Indexing results</h2>
+<table>
+<tr><th>Corpus</th><th>Mode</th><th class="num">Time</th><th class="num">Speedup</th><th class="num">Efficiency</th><th class="num">Frames/s</th><th class="num">Peak RAM</th><th>Identical</th></tr>
+<tr><td rowspan="4">1280×720</td><td>sequential</td><td class="num">14.59 s</td><td class="num">1.00</td><td class="num">100 %</td><td class="num">47</td><td class="num">123 MB</td><td>reference</td></tr>
+<tr><td>1 process</td><td class="num">12.99 s</td><td class="num">1.12</td><td class="num">112 %</td><td class="num">53</td><td class="num">196 MB</td><td>yes</td></tr>
+<tr><td>2 processes</td><td class="num">10.52 s</td><td class="num"><strong>1.39</strong></td><td class="num">69 %</td><td class="num">66</td><td class="num">311 MB</td><td>yes</td></tr>
+<tr><td>4 processes</td><td class="num">11.02 s</td><td class="num">1.32</td><td class="num">33 %</td><td class="num">63</td><td class="num">542 MB</td><td>yes</td></tr>
+<tr><td rowspan="4">480×270</td><td>sequential</td><td class="num">3.56 s</td><td class="num">1.00</td><td class="num">100 %</td><td class="num">194</td><td class="num">115 MB</td><td>reference</td></tr>
+<tr><td>1 process</td><td class="num">3.68 s</td><td class="num">0.97</td><td class="num">97 %</td><td class="num">188</td><td class="num">187 MB</td><td>yes</td></tr>
+<tr><td>2 processes</td><td class="num">2.00 s</td><td class="num"><strong>1.77</strong></td><td class="num">89 %</td><td class="num">344</td><td class="num">294 MB</td><td>yes</td></tr>
+<tr><td>4 processes</td><td class="num">1.46 s</td><td class="num"><strong>2.43</strong></td><td class="num">61 %</td><td class="num">472</td><td class="num">503 MB</td><td>yes</td></tr>
+</table>
+
+<h2>11.3 The control experiment: is it our code, or the machine?</h2>
+<p>To find where the 720p limit comes from, we removed <em>all</em> of our code: N copies of plain FFmpeg decoding the same film at
+the same time, no Python, no pipes, no SQLite.</p>
+<table>
+<tr><th>Resolution</th><th class="num">1 process</th><th class="num">2 processes</th><th class="num">4 processes</th></tr>
+<tr><td>480×270</td><td class="num">×1.00</td><td class="num">×1.72</td><td class="num">×2.61</td></tr>
+<tr><td>1280×720</td><td class="num">×1.00</td><td class="num">×1.11</td><td class="num">×1.13</td></tr>
+<tr><td>1920×1080</td><td class="num">×1.00</td><td class="num">×1.40</td><td class="num">×1.66 <span class="muted">(0.70–1.66 across runs)</span></td></tr>
+</table>
+<p>FFmpeg alone hits the same ceiling at 720p. So the limit is <strong>not</strong> the GIL, not inter-process communication and not
+SQLite: running several HD decoders at once barely increases total throughput on this laptop. The machine has a single 8 GB memory
+stick (<strong>single-channel memory</strong>, half the bandwidth of a dual-channel setup), and RAM was ~90 % used during the measurements.
+The explanation most consistent with all measurements is contention in the memory subsystem (shared L3 cache and memory bandwidth).
+We cannot prove it formally without hardware performance counters, and we say so. On a CPU-bound workload (480×270) the same code
+scales well: <strong>×2.43</strong> with 4 processes.</p>
+
+<div class="box key"><span class="tag">Key idea — the sentence for the jury</span>
+<p>"Our parallel engine is correct — identical fingerprints, distinct PIDs — and it scales when the work is CPU-bound (×2.4 with 4 processes
+at 480×270). At 720p on this single-channel laptop, even FFmpeg alone stops scaling, so more processes add overhead without adding
+throughput: 4 processes are not faster than 2. That is Amdahl plus hardware contention, measured, not assumed."</p></div>
+
+<h2>11.4 Why "1 process" can beat "sequential"</h2>
+<p>At 720p, 1 process was 12 % faster than the sequential loop; at 270p it was 3 % slower. The two modes run the same code; the differences
+come from measurement noise on a busy laptop (thermal state, background applications, memory pressure) and from small effects such as the
+worker running without the benchmark's sampler thread in the same process. A ±10 % band is normal; that is why we repeat and use the median.</p>
+
+<h2>11.5 Search results</h2>
+<table>
+<tr><th>Index size</th><th class="num">Band index</th><th class="num">Exhaustive</th><th class="num">Gain</th><th>Correct (both)</th></tr>
+<tr><td>690 (demo)</td><td class="num">12.4 ms</td><td class="num">4.6 ms</td><td class="num">×0.4</td><td>16/16</td></tr>
+<tr><td>50,690</td><td class="num">48.8 ms</td><td class="num">139.2 ms</td><td class="num">×2.9</td><td>16/16</td></tr>
+<tr><td>200,690</td><td class="num">185.1 ms</td><td class="num">475.8 ms</td><td class="num">×2.6</td><td>16/16</td></tr>
+<tr><td>500,690</td><td class="num">450.6 ms</td><td class="num">1,338.0 ms</td><td class="num">×3.0</td><td>16/16</td></tr>
+</table>
+<p>On a tiny index, scanning everything is cheaper than issuing ~10,000 probe lookups; from tens of thousands of fingerprints on, the band
+index wins with identical verdicts. Its cost still grows because each probe meets about N / 65,536 random collisions, but it touches only
+1–2 % of the index per query. (Distractors are random hashes; real libraries cluster more, so these are optimistic for both methods.)</p>
+<p><strong>Recognition accuracy:</strong> 12/12 on validation, 16/16 on test, with both methods; mean timestamp error 8 ms, max 50 ms.
+A full search (decode clip + fingerprints + candidates + alignment) takes about 0.3–0.4 s, dominated by decoding the clip.</p>
+
+<figure><img src="../screenshots/performances.png" alt="Performances page" style="max-height:120mm">
+<figcaption>Figure 6 — The Performances page plots the real measurements stored in the database.</figcaption></figure>
+
+<!-- ===================================================================== -->
+<h1 class="chapter"><span class="num">12</span>Running, reproducing and touring the repository</h1>
+
+<h2>12.1 Reproducible environment</h2>
+<ul>
+  <li><code>.python-version</code> (3.12) and a virtual environment <code>.venv</code> created from <code>requirements.txt</code>, which pins
+  <strong>every</strong> package to an exact version (output of <code>pip freeze</code> in the environment where all tests passed).</li>
+  <li><code>.nvmrc</code> (Node 24) and <code>frontend/package-lock.json</code>; <code>npm ci</code> installs exactly the locked versions.</li>
+  <li><code>backend/.env.example</code> documents every setting; the demo corpus is regenerated deterministically from seeds.</li>
+</ul>
+
+<h2>12.2 Commands</h2>
+<pre><span class="c"># one command (first run installs everything, then starts backend + frontend)</span>
+powershell -ExecutionPolicy Bypass -File scripts\start_windows.ps1
+
+<span class="c"># data and verification</span>
+.venv\Scripts\python scripts\generate_demo_videos.py            <span class="c"># demo films + clips + ground truth</span>
+powershell -ExecutionPolicy Bypass -File scripts\check_quality.ps1   <span class="c"># ruff + pytest + tsc</span>
+.venv\Scripts\python scripts\evaluate.py --split test --method both
+.venv\Scripts\python scripts\run_benchmark.py --repeats 3 --lowres --decode-experiment</pre>
+
+<h2>12.3 Repository map</h2>
+<table>
+<tr><th>Path</th><th>Read it to understand…</th></tr>
+<tr><td><code>backend/app/video/fingerprint.py</code></td><td>the pHash and Hamming distance (chapter 3)</td></tr>
+<tr><td><code>backend/app/video/ffmpeg_io.py</code></td><td>safe FFmpeg calls and streaming decode (chapter 2)</td></tr>
+<tr><td><code>backend/app/video/segmentation.py</code>, <code>pipeline.py</code></td><td>work units and the single business function</td></tr>
+<tr><td><code>backend/app/video/matching.py</code></td><td>voting, alignment, score, decision (chapter 5)</td></tr>
+<tr><td><code>backend/app/db/search_repo.py</code></td><td>band index vs exhaustive (chapter 4)</td></tr>
+<tr><td><code>backend/app/db/writer.py</code>, <code>repo.py</code>, <code>models.py</code></td><td>single writer, transactions, schema (chapter 8)</td></tr>
+<tr><td><code>backend/app/concurrency/*</code></td><td>process pool, I/O threads, thread-based job manager (chapter 7)</td></tr>
+<tr><td><code>backend/app/main.py</code>, <code>api/routes.py</code></td><td>startup/shutdown and REST API (chapter 9)</td></tr>
+<tr><td><code>backend/app/services/benchmark.py</code></td><td>benchmark methodology (chapter 11)</td></tr>
+<tr><td><code>frontend/app/reconnaissance/page.tsx</code></td><td>how a result is presented</td></tr>
+<tr><td><code>scripts/generate_demo_videos.py</code></td><td>the synthetic corpus and its traps (chapter 10)</td></tr>
+</table>
+
+<!-- ===================================================================== -->
+<h1 class="chapter"><span class="num">13</span>Defending the project: questions and answers</h1>
+
+<div class="qa"><p class="q">Why processes for indexing and not threads?</p>
+<p class="a">Decoding plus hashing is CPU work. In CPython the GIL lets only one thread run Python bytecode at a time, so threads would
+serialize the Python part. Processes have their own interpreter, memory and FFmpeg; they run on separate cores and a crash in one segment
+cannot take the web server down. The price is start-up time, pickling and RAM, which we measured.</p></div>
+
+<div class="qa"><p class="q">But FFmpeg is already a separate process. Couldn't threads drive N FFmpeg processes?</p>
+<p class="a">For the decoding part, yes — a thread waiting on a pipe releases the GIL. That is exactly why the <em>search</em> clip (≤ 30 s, ~200
+hashes) runs in a thread. For indexing we keep processes because the per-frame Python work (resize, DCT, median, bit packing over thousands of
+frames) would compete for one GIL, because isolation protects the server, and because it is the course's prescribed tool for CPU-bound work.
+We do not pretend the hashing dominates: the benchmark shows decoding dominates.</p></div>
+
+<div class="qa"><p class="q">Why is 4 processes not faster than 2 at 720p?</p>
+<p class="a">Because FFmpeg alone does not scale there either (×1.13 with 4 copies, no Python involved). Several HD decoders compete for the
+shared memory subsystem of this single-channel laptop. On a CPU-bound version of the same corpus (480×270) we get ×1.77 and ×2.43. Adding
+processes beyond the bottleneck only adds overhead: that is the point of efficiency = speedup / N.</p></div>
+
+<div class="qa"><p class="q">How do you guarantee sequential and parallel give the same result?</p>
+<p class="a">Same segmentation (independent of N), same function, same parameters, and an ownership rule [start, end) so no timestamp is computed
+twice. A test compares the full fingerprint lists (timestamps, hashes, informativeness) and finds them identical; the benchmark checks a hash
+digest of every mode.</p></div>
+
+<div class="qa"><p class="q">What prevents two threads from corrupting SQLite?</p>
+<p class="a">Only one thread ever writes: all writes go through a bounded <code>queue.Queue</code> to the writer thread, one transaction per job. Reads use
+their own short sessions, and WAL mode lets them run during writes. Worker processes never touch the database.</p></div>
+
+<div class="qa"><p class="q">Where do you use a Lock, and why not more?</p>
+<p class="a">Only where a structure is really shared between threads: the job table (written by job threads, read by request threads during
+polling), the dictionary of per-thumbnail locks and the benchmark's RAM samples. The writer and index queues are <code>queue.Queue</code>, already
+thread-safe, so adding locks there would be useless contention. Critical sections are short: never held while computing or waiting for a write.</p></div>
+
+<div class="qa"><p class="q">Why no asyncio, when the assignment suggested it for coordination?</p>
+<p class="a">asyncio shines when one thread must juggle thousands of network connections. We have a few requests and a few jobs at a time, so threads
+are enough and simpler: ordinary blocking code, and the primitives from chapters 1–2 (Queue, Lock, Event, Condition). FastAPI runs each
+<code>def</code> route in a worker thread; polling answers in ~4 ms (median) during indexing. Uvicorn keeps its own internal event loop for
+sockets, but our code never uses it — a test scans the sources to enforce that.</p></div>
+
+<div class="qa"><p class="q">With threads, what new race condition appeared, and how did you avoid it?</p>
+<p class="a">Two threads can persist the same job: if each took a snapshot and then queued its database write separately, an older snapshot ("running")
+could be written after a newer one ("completed") and overwrite it. We take the snapshot and put it in the writer's FIFO queue inside the same critical
+section, so the write order equals the state order. A test restarts the app and checks the job read from the database is "completed".</p></div>
+
+<div class="qa"><p class="q">How is cancellation implemented?</p>
+<p class="a">Cooperatively between segments: a flag stops new submissions, <code>Future.cancel()</code> removes segments not yet started, segments in progress
+finish and are saved. A re-index resumes from them. On application shutdown a <code>multiprocessing.Event</code> makes running segments stop at
+the next frame and kills their FFmpeg.</p></div>
+
+<div class="qa"><p class="q">Why not compare every clip frame with every film frame?</p>
+<p class="a">That is our exhaustive reference: it grows linearly with the library (1.34 s at 500k fingerprints vs 0.45 s with the band index, same
+verdicts). The band index uses the pigeonhole principle: with 4 bands, hashes within 3 bits always share a band; with 1-bit multi-probe,
+within 7 bits.</p></div>
+
+<div class="qa"><p class="q">Is your score a probability?</p>
+<p class="a">No. It is a documented heuristic combining Hamming similarity, coverage, number of coherent frames and offset stability. A probability would
+require statistical calibration on a large labelled dataset.</p></div>
+
+<div class="qa"><p class="q">How did you choose the thresholds without cheating?</p>
+<p class="a">On the validation split only: worst true match 0.830, best wrong candidate 0.146, threshold at the midpoint (0.50). Then we ran the test split
+once: 16/16.</p></div>
+
+<div class="qa"><p class="q">What happens with a black screen, a studio logo or credits?</p>
+<p class="a">Uniform frames are flagged by their informativeness and ignored. Generic frames that match many places get diluted votes. And one similar frame
+never decides: the clip needs ≥ 50 % coverage with a consistent offset and correct temporal order. Our unknown clip containing the shared logo is
+correctly rejected (coverage ~23 %).</p></div>
+
+<div class="qa"><p class="q">Why are your test videos synthetic?</p>
+<p class="a">We may not distribute copyrighted films, and synthetic videos give exact ground truth and reproducibility. The generator deliberately includes the
+hard cases (dark scene, repeated scene, shared passage, logo, credits). The same code works on real films; thresholds should be re-checked on them.</p></div>
+
+<div class="qa"><p class="q">Isn't HTTP between Next.js and FastAPI a distributed system?</p>
+<p class="a">No: both run on the same PC and talk over 127.0.0.1, like any local web application. All computation is in one backend process and its
+local pool. There is no remote worker, no cluster and no custom protocol.</p></div>
+
+<!-- ===================================================================== -->
+<h1 class="chapter"><span class="num">14</span>Limitations, design decisions and future work</h1>
+
+<h2>14.1 Deliberate deviations from the assignment (and why they make sense)</h2>
+<table>
+<tr><th>Assignment says</th><th>We did</th><th>Why</th></tr>
+<tr><td>Extract clip hashes "with the same parameters" as the index</td><td>Same hash, clip sampled at 10 fps instead of 2</td><td>A clip can start between two indexed frames; without oversampling fast scenes were missed. Also 5× better timestamp precision.</td></tr>
+<tr><td>Segments of 180 s</td><td>Adaptive 10–180 s, ≥ 8 segments per film</td><td>Short films would otherwise be one segment, with no parallelism and no progress bar.</td></tr>
+<tr><td><code>MAX_FFMPEG_CONCURRENT</code> setting</td><td>Removed</td><td>FFmpeg count is bounded structurally (one per pool process, one per I/O thread).</td></tr>
+<tr><td>CPU work in processes</td><td>Clip fingerprinting in a thread</td><td>A ≤ 30 s clip is decoded by an FFmpeg subprocess; queuing it behind indexing segments would make search slow.</td></tr>
+<tr><td><code>stored_path</code></td><td><code>stored_name</code> (relative)</td><td>No absolute path in the database or the browser; everything sandboxed in <code>data/media</code>.</td></tr>
+<tr><td>16 GB PC</td><td>Developed and measured on 8 GB</td><td>The available machine; it explains part of the benchmark results.</td></tr>
+</table>
+
+<h2>14.2 Known limitations</h2>
+<ul>
+  <li>Strong cropping, mirroring, overlays, speed changes, phone-filmed screens: not handled (out of V1 scope).</li>
+  <li>No audio fingerprint.</li>
+  <li>Validation corpus is synthetic and small (28 clips); thresholds must be re-checked on real films.</li>
+  <li>Only warm-cache measurements; no automatic recovery after a full system crash (interrupted jobs are marked, re-index resumes).</li>
+</ul>
+
+<h2>14.3 Future work</h2>
+<ul>
+  <li>A fine verification step at 10 fps around the best hypothesis (sub-100 ms timestamps, stronger rejection).</li>
+  <li>An in-memory NumPy index loaded at startup for very fast exhaustive search on medium libraries.</li>
+  <li>Adaptive multi-probe (more probes only for frames with few candidates); audio fingerprints as a second signal.</li>
+  <li>Hardware decoding (if a GPU is allowed) — the main bottleneck is decoding.</li>
+</ul>
+
+<!-- ===================================================================== -->
+<h1 class="chapter"><span class="num">15</span>Appendix: French ↔ English glossary &amp; cheat sheet</h1>
+<div class="two">
+<table>
+<tr><th>Français</th><th>English</th></tr>
+<tr><td>empreinte (perceptuelle)</td><td>(perceptual) fingerprint / hash</td></tr>
+<tr><td>distance de Hamming</td><td>Hamming distance</td></tr>
+<tr><td>décalage</td><td>offset</td></tr>
+<tr><td>alignement temporel</td><td>temporal alignment</td></tr>
+<tr><td>couverture</td><td>coverage</td></tr>
+<tr><td>score de similarité</td><td>similarity score</td></tr>
+<tr><td>résultat ambigu</td><td>ambiguous result</td></tr>
+<tr><td>aucune correspondance fiable</td><td>no reliable match</td></tr>
+<tr><td>index par bandes</td><td>band index (LSH-style)</td></tr>
+<tr><td>rappel / précision</td><td>recall / precision</td></tr>
+<tr><td>image clé</td><td>keyframe (I-frame)</td></tr>
+<tr><td>images par seconde</td><td>frames per second (fps)</td></tr>
+<tr><td>vignette</td><td>thumbnail</td></tr>
+<tr><td>vérité terrain</td><td>ground truth</td></tr>
+</table>
+<table>
+<tr><th>Français</th><th>English</th></tr>
+<tr><td>processus / thread / coroutine</td><td>process / thread / coroutine</td></tr>
+<tr><td>pool de processus</td><td>process pool</td></tr>
+<tr><td>section critique</td><td>critical section</td></tr>
+<tr><td>situation de compétition</td><td>race condition</td></tr>
+<tr><td>verrou</td><td>lock (mutex)</td></tr>
+<tr><td>interblocage</td><td>deadlock</td></tr>
+<tr><td>producteur–consommateur</td><td>producer–consumer</td></tr>
+<tr><td>file bornée</td><td>bounded queue</td></tr>
+<tr><td>annulation coopérative</td><td>cooperative cancellation</td></tr>
+<tr><td>accélération / efficacité</td><td>speedup / efficiency</td></tr>
+<tr><td>sursouscription</td><td>oversubscription</td></tr>
+<tr><td>boucle d'événements</td><td>event loop</td></tr>
+<tr><td>écrivain unique</td><td>single writer</td></tr>
+<tr><td>bande passante mémoire</td><td>memory bandwidth</td></tr>
+</table>
+</div>
+
+<h2>Cheat sheet — the numbers to remember</h2>
+<table>
+<tr><td>Hash</td><td>64 bits = 8×8 low-frequency DCT block of a 32×32 gray image, threshold = median</td></tr>
+<tr><td>Sampling</td><td>index 2 frames/s (grid of 500 ms); clip 10 frames/s</td></tr>
+<tr><td>Match rules</td><td>pair if d ≤ 12; accept if score ≥ 0.50, coverage ≥ 50 %, span ≥ 50 %, ≥ 4 coherent frames; ambiguous if 2nd ≥ 0.85 × 1st</td></tr>
+<tr><td>Band index</td><td>4 bands × 16 bits; guaranteed recall d ≤ 3 (exact), d ≤ 7 (1-bit multi-probe)</td></tr>
+<tr><td>Accuracy</td><td>12/12 validation, 16/16 test, mean timestamp error 8 ms</td></tr>
+<tr><td>Speedup 720p</td><td>×1.39 (2 proc), ×1.32 (4 proc) — memory-bound machine</td></tr>
+<tr><td>Speedup 480×270</td><td>×1.77 (2 proc), ×2.43 (4 proc) — CPU-bound</td></tr>
+<tr><td>Search 500k</td><td>bands 451 ms vs exhaustive 1,338 ms, same verdicts</td></tr>
+<tr><td>Concurrency map</td><td>processes = segments; threads = HTTP requests, file I/O, background jobs, single SQLite writer; no asyncio; HTTP polling for progress</td></tr>
+<tr><td>Tests</td><td>73 automated tests, including a real race condition, concurrent polling and a real browser end-to-end run</td></tr>
+</table>
+
+<p class="muted small" style="margin-top:8mm">End of guide. Source of every figure: <code>docs/results/RESULTATS.md</code> and the JSON files in <code>docs/results/</code>.</p>
+</body>
+</html>

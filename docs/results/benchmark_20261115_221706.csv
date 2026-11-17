@@ -1,0 +1,9 @@
+corpus,mode,process_count,elapsed_ms_median,speedup,efficiency,frames_per_s,fingerprints_per_s,peak_ram_mb,busy_cores_avg,write_ms_median,identical_to_sequential
+index_720p,sequential,1,14593.3,1.0,1.0,47.3,47.3,122.8,1.5666666666666667,75.7,True
+index_720p,parallel,1,12990.9,1.123,1.123,53.1,53.1,196.2,1.3266666666666669,78.7,True
+index_720p,parallel,2,10518.0,1.387,0.694,65.6,65.6,311.1,2.2533333333333334,79.7,True
+index_720p,parallel,4,11020.1,1.324,0.331,62.6,62.6,541.7,3.1166666666666667,82.6,True
+index_270p,sequential,1,3557.2,1.0,1.0,194.0,194.0,114.6,1.0466666666666666,79.9,True
+index_270p,parallel,1,3675.6,0.968,0.968,187.7,187.7,187.3,1.0766666666666667,78.6,True
+index_270p,parallel,2,2003.8,1.775,0.888,344.3,344.3,294.1,1.95,82.0,True
+index_270p,parallel,4,1461.3,2.434,0.609,472.2,472.2,502.6,2.7399999999999998,83.7,True

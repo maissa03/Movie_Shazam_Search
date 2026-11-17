@@ -1,0 +1,607 @@
+{
+  "split": "test",
+  "method": "bands",
+  "clips": 16,
+  "correct": 16,
+  "accuracy": 1.0,
+  "timestamp_error_ms": {
+    "mean": 8.3,
+    "max": 50
+  },
+  "mean_search_ms": 369.4,
+  "rows": [
+    {
+      "id": "tes_A_000000_10s_clean",
+      "split": "test",
+      "transform": "clean",
+      "note": "début du film (noir + logo commun)",
+      "expected": "match",
+      "got": "match",
+      "correct": true,
+      "error_ms": 0,
+      "truth_key": "A",
+      "truth_start_ms": 0,
+      "best_key": "A",
+      "candidates": [
+        {
+          "key": "A",
+          "start_ms": 0,
+          "score": 0.9672,
+          "coverage": 1.0,
+          "span": 1.0,
+          "mean_d": 0.118
+        },
+        {
+          "key": "B",
+          "start_ms": 200,
+          "score": 0.1581,
+          "coverage": 0.1667,
+          "span": 0.1667,
+          "mean_d": 0.667
+        },
+        {
+          "key": "C",
+          "start_ms": 200,
+          "score": 0.1581,
+          "coverage": 0.1667,
+          "span": 0.1667,
+          "mean_d": 0.667
+        }
+      ],
+      "reason": "Correspondance retenue : alignement temporel cohérent sur toute la durée du clip.",
+      "candidates_found": 336,
+      "candidate_ms": 11.2,
+      "total_ms": 347.2
+    },
+    {
+      "id": "tes_A_044600_10s_clean",
+      "split": "test",
+      "transform": "clean",
+      "note": "traverse une frontière de segment (45 s)",
+      "expected": "match",
+      "got": "match",
+      "correct": true,
+      "error_ms": 0,
+      "truth_key": "A",
+      "truth_start_ms": 44600,
+      "best_key": "A",
+      "candidates": [
+        {
+          "key": "A",
+          "start_ms": 44600,
+          "score": 0.9846,
+          "coverage": 1.0,
+          "span": 1.0,
+          "mean_d": 0.2
+        }
+      ],
+      "reason": "Correspondance retenue : alignement temporel cohérent sur toute la durée du clip.",
+      "candidates_found": 107,
+      "candidate_ms": 18.3,
+      "total_ms": 352.7
+    },
+    {
+      "id": "tes_A_105000_15s_clean",
+      "split": "test",
+      "transform": "clean",
+      "note": "fin du film (générique)",
+      "expected": "match",
+      "got": "match",
+      "correct": true,
+      "error_ms": 0,
+      "truth_key": "A",
+      "truth_start_ms": 105000,
+      "best_key": "A",
+      "candidates": [
+        {
+          "key": "A",
+          "start_ms": 105000,
+          "score": 0.9795,
+          "coverage": 1.0,
+          "span": 1.0,
+          "mean_d": 0.267
+        },
+        {
+          "key": "C",
+          "start_ms": 60050,
+          "score": 0.1849,
+          "coverage": 0.2667,
+          "span": 0.2667,
+          "mean_d": 3.5
+        },
+        {
+          "key": "D",
+          "start_ms": 45000,
+          "score": 0.1849,
+          "coverage": 0.2667,
+          "span": 0.2667,
+          "mean_d": 3.75
+        }
+      ],
+      "reason": "Correspondance retenue : alignement temporel cohérent sur toute la durée du clip.",
+      "candidates_found": 195,
+      "candidate_ms": 15.6,
+      "total_ms": 378.2
+    },
+    {
+      "id": "tes_A_080250_10s_combo",
+      "split": "test",
+      "transform": "combo",
+      "note": "480x270 + 15 fps + CRF 30",
+      "expected": "match",
+      "got": "match",
+      "correct": true,
+      "error_ms": 50,
+      "truth_key": "A",
+      "truth_start_ms": 80250,
+      "best_key": "A",
+      "candidates": [
+        {
+          "key": "A",
+          "start_ms": 80300,
+          "score": 0.8364,
+          "coverage": 1.0,
+          "span": 1.0,
+          "mean_d": 1.9
+        },
+        {
+          "key": "A",
+          "start_ms": 76400,
+          "score": 0.0994,
+          "coverage": 0.25,
+          "span": 0.25,
+          "mean_d": 7.6
+        },
+        {
+          "key": "A",
+          "start_ms": 84100,
+          "score": 0.0638,
+          "coverage": 0.15,
+          "span": 0.2,
+          "mean_d": 7.333
+        }
+      ],
+      "reason": "Correspondance retenue : alignement temporel cohérent sur toute la durée du clip.",
+      "candidates_found": 240,
+      "candidate_ms": 9.7,
+      "total_ms": 130.9
+    },
+    {
+      "id": "tes_A_030500_5s_clean",
+      "split": "test",
+      "transform": "clean",
+      "note": "scène répétée A[30-36]=A[90-96]",
+      "expected": "ambiguous",
+      "got": "ambiguous",
+      "correct": true,
+      "error_ms": null,
+      "truth_key": "A",
+      "truth_start_ms": 30500,
+      "best_key": null,
+      "candidates": [
+        {
+          "key": "A",
+          "start_ms": 30500,
+          "score": 0.8308,
+          "coverage": 1.0,
+          "span": 1.0,
+          "mean_d": 2.2
+        },
+        {
+          "key": "A",
+          "start_ms": 90500,
+          "score": 0.8308,
+          "coverage": 1.0,
+          "span": 1.0,
+          "mean_d": 2.2
+        }
+      ],
+      "reason": "Résultat ambigu : un second placement dans le même film à un autre instant obtient un score très proche (0.83 contre 0.83).",
+      "candidates_found": 78,
+      "candidate_ms": 13.1,
+      "total_ms": 305.1
+    },
+    {
+      "id": "tes_B_003000_5s_clean",
+      "split": "test",
+      "transform": "clean",
+      "note": "",
+      "expected": "match",
+      "got": "match",
+      "correct": true,
+      "error_ms": 0,
+      "truth_key": "B",
+      "truth_start_ms": 3000,
+      "best_key": "B",
+      "candidates": [
+        {
+          "key": "B",
+          "start_ms": 3000,
+          "score": 0.9385,
+          "coverage": 1.0,
+          "span": 1.0,
+          "mean_d": 0.8
+        }
+      ],
+      "reason": "Correspondance retenue : alignement temporel cohérent sur toute la durée du clip.",
+      "candidates_found": 44,
+      "candidate_ms": 7.2,
+      "total_ms": 305.7
+    },
+    {
+      "id": "tes_B_070300_10s_recompress",
+      "split": "test",
+      "transform": "recompress",
+      "note": "",
+      "expected": "match",
+      "got": "match",
+      "correct": true,
+      "error_ms": 0,
+      "truth_key": "B",
+      "truth_start_ms": 70300,
+      "best_key": "B",
+      "candidates": [
+        {
+          "key": "B",
+          "start_ms": 70300,
+          "score": 0.9106,
+          "coverage": 1.0,
+          "span": 1.0,
+          "mean_d": 1.1
+        }
+      ],
+      "reason": "Correspondance retenue : alignement temporel cohérent sur toute la durée du clip.",
+      "candidates_found": 95,
+      "candidate_ms": 12.2,
+      "total_ms": 326.7
+    },
+    {
+      "id": "tes_B_076000_14s_downscale",
+      "split": "test",
+      "transform": "downscale",
+      "note": "fin du film",
+      "expected": "match",
+      "got": "match",
+      "correct": true,
+      "error_ms": 0,
+      "truth_key": "B",
+      "truth_start_ms": 76000,
+      "best_key": "B",
+      "candidates": [
+        {
+          "key": "B",
+          "start_ms": 76000,
+          "score": 0.9615,
+          "coverage": 1.0,
+          "span": 1.0,
+          "mean_d": 0.5
+        },
+        {
+          "key": "D",
+          "start_ms": 46000,
+          "score": 0.1328,
+          "coverage": 0.25,
+          "span": 0.2857,
+          "mean_d": 6.0
+        },
+        {
+          "key": "A",
+          "start_ms": 106000,
+          "score": 0.1264,
+          "coverage": 0.2857,
+          "span": 0.2857,
+          "mean_d": 7.25
+        }
+      ],
+      "reason": "Correspondance retenue : alignement temporel cohérent sur toute la durée du clip.",
+      "candidates_found": 190,
+      "candidate_ms": 16.5,
+      "total_ms": 213.5
+    },
+    {
+      "id": "tes_C_024500_10s_clean",
+      "split": "test",
+      "transform": "clean",
+      "note": "scène sombre",
+      "expected": "match",
+      "got": "match",
+      "correct": true,
+      "error_ms": 0,
+      "truth_key": "C",
+      "truth_start_ms": 24500,
+      "best_key": "C",
+      "candidates": [
+        {
+          "key": "C",
+          "start_ms": 24500,
+          "score": 0.9063,
+          "coverage": 1.0,
+          "span": 1.0,
+          "mean_d": 1.1
+        },
+        {
+          "key": "C",
+          "start_ms": 53000,
+          "score": 0.0038,
+          "coverage": 0.05,
+          "span": 0.05,
+          "mean_d": 12.0
+        }
+      ],
+      "reason": "Correspondance retenue : alignement temporel cohérent sur toute la durée du clip.",
+      "candidates_found": 88,
+      "candidate_ms": 11.2,
+      "total_ms": 526.6
+    },
+    {
+      "id": "tes_C_025000_6s_recompress",
+      "split": "test",
+      "transform": "recompress",
+      "note": "scène sombre recompressée",
+      "expected": "match",
+      "got": "match",
+      "correct": true,
+      "error_ms": 0,
+      "truth_key": "C",
+      "truth_start_ms": 25000,
+      "best_key": "C",
+      "candidates": [
+        {
+          "key": "C",
+          "start_ms": 25000,
+          "score": 0.6667,
+          "coverage": 1.0,
+          "span": 1.0,
+          "mean_d": 4.333
+        },
+        {
+          "key": "C",
+          "start_ms": 53000,
+          "score": 0.0064,
+          "coverage": 0.0833,
+          "span": 0.0833,
+          "mean_d": 12.0
+        }
+      ],
+      "reason": "Correspondance retenue : alignement temporel cohérent sur toute la durée du clip.",
+      "candidates_found": 51,
+      "candidate_ms": 9.2,
+      "total_ms": 328.5
+    },
+    {
+      "id": "tes_C_050750_20s_downscale",
+      "split": "test",
+      "transform": "downscale",
+      "note": "traverse 2 frontières de segment",
+      "expected": "match",
+      "got": "match",
+      "correct": true,
+      "error_ms": 50,
+      "truth_key": "C",
+      "truth_start_ms": 50750,
+      "best_key": "C",
+      "candidates": [
+        {
+          "key": "C",
+          "start_ms": 50800,
+          "score": 0.8118,
+          "coverage": 1.0,
+          "span": 1.0,
+          "mean_d": 2.2
+        },
+        {
+          "key": "B",
+          "start_ms": 18800,
+          "score": 0.0058,
+          "coverage": 0.025,
+          "span": 0.025,
+          "mean_d": 10.0
+        },
+        {
+          "key": "C",
+          "start_ms": 22300,
+          "score": 0.0058,
+          "coverage": 0.025,
+          "span": 0.025,
+          "mean_d": 10.0
+        }
+      ],
+      "reason": "Correspondance retenue : alignement temporel cohérent sur toute la durée du clip.",
+      "candidates_found": 180,
+      "candidate_ms": 22.1,
+      "total_ms": 329.1
+    },
+    {
+      "id": "tes_D_002000_10s_fps30",
+      "split": "test",
+      "transform": "fps30",
+      "note": "FPS 25 -> 30",
+      "expected": "match",
+      "got": "match",
+      "correct": true,
+      "error_ms": 0,
+      "truth_key": "D",
+      "truth_start_ms": 2000,
+      "best_key": "D",
+      "candidates": [
+        {
+          "key": "D",
+          "start_ms": 2000,
+          "score": 0.9846,
+          "coverage": 1.0,
+          "span": 1.0,
+          "mean_d": 0.2
+        },
+        {
+          "key": "A",
+          "start_ms": 1500,
+          "score": 0.1464,
+          "coverage": 0.15,
+          "span": 0.15,
+          "mean_d": 0.0
+        },
+        {
+          "key": "B",
+          "start_ms": 1500,
+          "score": 0.1464,
+          "coverage": 0.15,
+          "span": 0.15,
+          "mean_d": 0.0
+        }
+      ],
+      "reason": "Correspondance retenue : alignement temporel cohérent sur toute la durée du clip.",
+      "candidates_found": 412,
+      "candidate_ms": 11.3,
+      "total_ms": 556.8
+    },
+    {
+      "id": "tes_D_018000_15s_clean",
+      "split": "test",
+      "transform": "clean",
+      "note": "contient le passage partagé + contexte propre à D",
+      "expected": "match",
+      "got": "match",
+      "correct": true,
+      "error_ms": 0,
+      "truth_key": "D",
+      "truth_start_ms": 18000,
+      "best_key": "D",
+      "candidates": [
+        {
+          "key": "D",
+          "start_ms": 18000,
+          "score": 0.9897,
+          "coverage": 1.0,
+          "span": 1.0,
+          "mean_d": 0.133
+        },
+        {
+          "key": "B",
+          "start_ms": 38000,
+          "score": 0.5581,
+          "coverage": 0.5667,
+          "span": 0.5667,
+          "mean_d": 0.118
+        },
+        {
+          "key": "D",
+          "start_ms": 21100,
+          "score": 0.0154,
+          "coverage": 0.0667,
+          "span": 0.0667,
+          "mean_d": 10.0
+        }
+      ],
+      "reason": "Correspondance retenue : alignement temporel cohérent sur toute la durée du clip.",
+      "candidates_found": 417,
+      "candidate_ms": 17.4,
+      "total_ms": 721.2
+    },
+    {
+      "id": "tes_F_003000_10s_clean",
+      "split": "test",
+      "transform": "clean",
+      "note": "film non indexé",
+      "expected": "no_match",
+      "got": "no_match",
+      "correct": true,
+      "error_ms": null,
+      "truth_key": "F",
+      "truth_start_ms": 3000,
+      "best_key": null,
+      "candidates": [
+        {
+          "key": "A",
+          "start_ms": 38900,
+          "score": 0.0038,
+          "coverage": 0.05,
+          "span": 0.05,
+          "mean_d": 12.0
+        }
+      ],
+      "reason": "Aucune correspondance suffisamment fiable (meilleur candidat rejeté : score 0.00 < 0.50, couverture 5% < 50%, étendue temporelle 5% < 50%, 1 images cohérentes < 4).",
+      "candidates_found": 2,
+      "candidate_ms": 49.7,
+      "total_ms": 533.6
+    },
+    {
+      "id": "tes_F_015500_10s_recompress",
+      "split": "test",
+      "transform": "recompress",
+      "note": "film non indexé",
+      "expected": "no_match",
+      "got": "no_match",
+      "correct": true,
+      "error_ms": null,
+      "truth_key": "F",
+      "truth_start_ms": 15500,
+      "best_key": null,
+      "candidates": [],
+      "reason": "Aucune correspondance suffisamment fiable : aucune image du clip ne ressemble à la bibliothèque indexée.",
+      "candidates_found": 0,
+      "candidate_ms": 9.8,
+      "total_ms": 423.5
+    },
+    {
+      "id": "tes_F_000000_8s_combo",
+      "split": "test",
+      "transform": "combo",
+      "note": "film non indexé (noir + logo commun)",
+      "expected": "no_match",
+      "got": "no_match",
+      "correct": true,
+      "error_ms": null,
+      "truth_key": "F",
+      "truth_start_ms": 0,
+      "best_key": null,
+      "candidates": [
+        {
+          "key": "A",
+          "start_ms": 0,
+          "score": 0.2252,
+          "coverage": 0.2308,
+          "span": 0.2308,
+          "mean_d": 0.0
+        },
+        {
+          "key": "B",
+          "start_ms": 0,
+          "score": 0.2252,
+          "coverage": 0.2308,
+          "span": 0.2308,
+          "mean_d": 0.0
+        },
+        {
+          "key": "C",
+          "start_ms": 0,
+          "score": 0.2252,
+          "coverage": 0.2308,
+          "span": 0.2308,
+          "mean_d": 0.0
+        }
+      ],
+      "reason": "Aucune correspondance suffisamment fiable (meilleur candidat rejeté : score 0.23 < 0.50, couverture 23% < 50%, étendue temporelle 23% < 50%, 3 images cohérentes < 4).",
+      "candidates_found": 228,
+      "candidate_ms": 7.4,
+      "total_ms": 130.4
+    }
+  ],
+  "params": {
+    "max_hamming": 12,
+    "min_informativeness": 3.0,
+    "probe_radius": 1,
+    "max_candidates_per_frame": 300,
+    "offset_bucket_ms": 500,
+    "offset_tolerance_ms": 300,
+    "local_search_ms": 500,
+    "hypotheses_per_movie": 3,
+    "max_hypotheses": 10,
+    "min_informative_frames": 4,
+    "accept_score": 0.5,
+    "min_coverage": 0.5,
+    "min_span_ratio": 0.5,
+    "min_matched_frames": 4,
+    "ambiguity_ratio": 0.85,
+    "distinct_offset_ms": 3000
+  }
+}

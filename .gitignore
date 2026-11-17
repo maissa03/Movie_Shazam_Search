@@ -1,0 +1,23 @@
+# Données locales (films, base SQLite, vignettes, corpus générés) : jamais dans le dépôt
+data/
+!data/.gitkeep
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+backend/.env
+
+# Node / Next.js
+frontend/node_modules/
+frontend/.next/
+frontend/.env.local
+frontend/next-env.d.ts
+frontend/tsconfig.tsbuildinfo
+
+# Divers
+*.log
+.DS_Store
+Thumbs.db

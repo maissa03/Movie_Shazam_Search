@@ -1,0 +1,290 @@
+<h1 class="chapter"><span class="num">6</span>Concurrency fundamentals (the course, distilled)</h1>
+
+<h2>6.1 Program, process, thread</h2>
+<ul>
+  <li>A <strong>program</strong> is a file of instructions. A <strong>process</strong> is a running program: it has its
+  own memory space (variables, heap), its own open files and at least one thread. Two processes cannot see each other's
+  variables — they must communicate explicitly (IPC: pipes, queues, files, sockets).</li>
+  <li>A <strong>thread</strong> is a sequence of execution <em>inside</em> a process. All threads of a process share the same
+  memory. That makes communication free… and dangerous (race conditions).</li>
+  <li>The operating system's <strong>scheduler</strong> decides which thread runs on which CPU core, and switches between them
+  (a <strong>context switch</strong>) many times per second.</li>
+</ul>
+
+<h2>6.2 Concurrency vs parallelism</h2>
+<p><strong>Concurrency</strong> = several tasks <em>in progress</em> at the same time (they may take turns on one core).
+<strong>Parallelism</strong> = several tasks <em>executing</em> at the same instant on different cores. A waiter serving
+ten tables alone is concurrent; ten waiters are parallel. Threads waiting for I/O give concurrency; processes give parallelism.</p>
+
+<h2>6.3 CPU-bound vs I/O-bound</h2>
+<table>
+<tr><th></th><th>CPU-bound</th><th>I/O-bound</th></tr>
+<tr><td>Time spent…</td><td>computing</td><td>waiting (disk, network, subprocess, database)</td></tr>
+<tr><td>Examples in MovieShazam</td><td>decoding video, DCT, hashing</td><td>copying an upload, SHA-256 of a file, ffprobe, SQLite writes, HTTP requests</td></tr>
+<tr><td>What helps</td><td>more cores working → <strong>processes</strong></td><td>overlapping the waits → <strong>threads</strong></td></tr>
+</table>
+
+<h2>6.4 The GIL (Global Interpreter Lock)</h2>
+<p>CPython protects its internal data structures with one global lock: <strong>only one thread executes Python bytecode at a
+time</strong>, even on a 12-core machine. Two consequences, both used in MovieShazam:</p>
+<ol>
+  <li>Threads <strong>do not</strong> speed up pure-Python computation — use processes, each with its own interpreter and its own GIL.</li>
+  <li>The GIL is <strong>released</strong> during blocking system calls (reading a file, waiting for a subprocess pipe,
+  <code>time.sleep</code>) and inside many C extensions (large NumPy operations). So threads <strong>do</strong> help for I/O.</li>
+</ol>
+
+<h2>6.5 Speedup, efficiency and Amdahl's law</h2>
+<div class="formula">speedup(N) = T<sub>1</sub> / T<sub>N</sub> &nbsp;&nbsp;&nbsp; efficiency(N) = speedup(N) / N</div>
+<p><strong>Amdahl's law:</strong> if a fraction <em>p</em> of the work can be parallelized and (1 − p) cannot,</p>
+<div class="formula">speedup(N) ≤ 1 / ((1 − p) + p / N)</div>
+<p>Example: with p = 0.9 and N = 4, the maximum is 1 / (0.1 + 0.225) ≈ 3.08, not 4. And reality adds more costs that Amdahl
+ignores: starting processes, serializing data between them, and <strong>competition for shared hardware</strong> (memory
+bandwidth, caches, disk). This last point is exactly what our 720p benchmark shows (chapter 11).</p>
+
+<h2>6.6 Race conditions and critical sections</h2>
+<p>A <strong>race condition</strong> happens when the result depends on the unpredictable interleaving of threads. Classic example:</p>
+<pre>v = counter        <span class="c"># thread A reads 41</span>
+                   <span class="c"># ... thread B reads 41, writes 42 ...</span>
+counter = v + 1    <span class="c"># thread A writes 42 → B's increment is LOST</span></pre>
+<p>The code between "read" and "write" is a <strong>critical section</strong>: it must not be interleaved. MovieShazam has a test
+that really loses updates this way (8 threads × 2,000 increments end below 16,000) and two tests showing the fixes.</p>
+
+<h2>6.7 The synchronization toolbox (chapter 1 part 2 and chapter 2 of the course)</h2>
+<table>
+<tr><th>Primitive</th><th>What it does</th><th>Typical use</th></tr>
+<tr><td><code>Lock</code> (mutex)</td><td>Only one holder at a time; others wait.</td><td>Protect a short critical section on shared data.</td></tr>
+<tr><td><code>RLock</code></td><td>A lock the same thread can re-acquire (re-entrant).</td><td>Recursive code that locks twice. (Not needed in MovieShazam.)</td></tr>
+<tr><td><code>Semaphore(n)</code></td><td>At most n holders at a time.</td><td>Limit access to a resource (n concurrent searches).</td></tr>
+<tr><td><code>Event</code></td><td>A boolean flag threads can wait on.</td><td>"Stop now" signals, "closed" flags.</td></tr>
+<tr><td><code>Condition</code></td><td>Wait until a <em>predicate</em> on shared state becomes true (always <code>while not pred: wait()</code> under a lock).</td><td>"Wait until no indexing job is running."</td></tr>
+<tr><td><code>Barrier(n)</code></td><td>n parties wait until all n have arrived.</td><td>Prove n workers are alive at once.</td></tr>
+<tr><td><code>queue.Queue(maxsize)</code></td><td>Thread-safe FIFO; <code>put</code> blocks when full, <code>get</code> blocks when empty.</td><td><strong>Producer–consumer</strong> pipelines without any explicit lock.</td></tr>
+</table>
+
+<div class="box key"><span class="tag">Key idea — prefer ownership to locking</span>
+<p>The best way to avoid races is to make sure only <strong>one</strong> thread ever touches a piece of state. MovieShazam does this
+with the database: one writer thread owns every SQLite write, and the processes never touch the database at all. Locks are used
+only where a structure is genuinely shared — such as the job table, read by request threads and written by job threads.</p></div>
+
+<h2>6.8 Deadlock, in one paragraph</h2>
+<p>A deadlock needs four conditions at once: mutual exclusion, hold-and-wait, no preemption, circular wait (A holds X and waits for Y,
+B holds Y and waits for X). MovieShazam avoids them structurally: no code path holds two locks at once, the writer thread never
+waits for anyone, and a full pipe — a sneaky deadlock source with subprocesses — is avoided by sending FFmpeg's stderr to a file.</p>
+
+<h2>6.9 Pools: reuse workers instead of creating them</h2>
+<p>Creating a thread costs microseconds; creating a process on Windows costs <strong>tens to hundreds of milliseconds</strong>
+(a new interpreter starts and re-imports modules). A <strong>pool</strong> creates workers once and feeds them tasks.
+<code>concurrent.futures</code> offers <code>ThreadPoolExecutor</code> and <code>ProcessPoolExecutor</code> with the same API:
+<code>submit(fn, *args)</code> returns a <strong>Future</strong>, an object that will later hold the result or the exception.</p>
+
+<h2>6.10 Processes on Windows: <code>spawn</code>, pickling, <code>__main__</code></h2>
+<ul>
+  <li>Linux can <code>fork</code> (copy the parent process). Windows cannot: it uses <strong><code>spawn</code></strong>, which starts a
+  fresh Python and <strong>re-imports the main module</strong>. Hence the rule: code that creates processes must be under
+  <code>if __name__ == "__main__":</code>, otherwise each child would create children (we hit this exact error during development
+  when running a script from stdin).</li>
+  <li>Tasks and results travel between processes by <strong>pickling</strong> (serialization). Only module-level functions and simple
+  data can be pickled; large data is expensive to send. MovieShazam sends a small <code>SegmentTask</code> and receives a few KB
+  of integers — never frames.</li>
+  <li>Synchronization objects (Event, Barrier) cannot be sent as task arguments; they are passed to workers <em>at creation</em> through the
+  pool's <code>initializer</code>.</li>
+</ul>
+
+<h2>6.11 asyncio — and why MovieShazam does not use it</h2>
+<p>For completeness (it appears in the course outline): an <strong>event loop</strong> runs many <strong>coroutines</strong>
+(<code>async def</code>) in a <em>single</em> thread. A coroutine runs until it hits <code>await</code> on something not ready yet,
+then the loop runs another one. It is excellent for multiplexing <em>thousands</em> of network connections, because a waiting
+coroutine costs almost nothing. Its golden rule is "never block the loop", which forces you to split code into blocking and
+non-blocking functions and to delegate every blocking call.</p>
+<p>MovieShazam has a handful of simultaneous requests and a handful of background jobs. <strong>Threads are enough</strong>, and they are
+simpler to write, explain and test: ordinary functions, ordinary blocking calls, and the synchronization primitives you already know from
+chapters 1 and 2 of the course. So the application code contains <strong>no coroutine and no use of the <code>asyncio</code> module</strong>
+— a test enforces it (<code>test_application_code_does_not_use_asyncio</code>).</p>
+<div class="box info"><span class="tag">Precise and honest</span>
+<p>Uvicorn, the HTTP server, still uses its own event loop internally to read sockets. FastAPI hands each of our <code>def</code> routes to a
+<strong>worker thread</strong> from its thread pool. Our code never touches that loop: startup and shutdown are plain functions
+(<code>on_startup</code> / <code>on_shutdown</code> handlers), and upload size limits use Starlette's built-in
+<code>RequestBodyLimitMiddleware</code>.</p></div>
+
+<!-- ===================================================================== -->
+<h1 class="chapter"><span class="num">7</span>Concurrency in MovieShazam, line by line</h1>
+
+<h2>7.1 Who runs where</h2>
+<figure>
+<svg viewBox="0 0 700 380" xmlns="http://www.w3.org/2000/svg" font-family="Segoe UI, Arial" font-size="11">
+  <rect x="10" y="10" width="680" height="360" rx="10" fill="#f4f6f9" stroke="#d9dee7"/>
+  <text x="25" y="32" font-weight="700">Process 1 — Uvicorn / FastAPI (python.exe): only threads, no asyncio in our code</text>
+  <rect x="25" y="45" width="205" height="125" rx="8" fill="#e8f0fb" stroke="#1d5fa8"/>
+  <text x="37" y="66" font-weight="700" fill="#1d5fa8">Request threads (FastAPI pool)</text>
+  <text x="37" y="86">• one thread per request</text><text x="37" y="103">• routes are plain def</text>
+  <text x="37" y="120">• reply 202 + job id at once</text><text x="37" y="137">• polling reads job snapshots</text><text x="37" y="154">  under the job-table Lock</text>
+  <rect x="242" y="45" width="215" height="125" rx="8" fill="#fff" stroke="#1b2330"/>
+  <text x="254" y="66" font-weight="700">Background job threads</text>
+  <text x="254" y="86">• index worker: queue.Queue(max)</text><text x="254" y="103">  + None sentinel to stop</text>
+  <text x="254" y="120">• search pool: ThreadPoolExecutor(2)</text><text x="254" y="137">• benchmark thread</text><text x="254" y="154">• Condition: CPU exclusivity</text>
+  <rect x="469" y="45" width="206" height="58" rx="8" fill="#fff" stroke="#1b2330"/>
+  <text x="481" y="66" font-weight="700">I/O thread pool (2)</text><text x="481" y="86">copy + SHA-256, ffprobe, thumbnails</text>
+  <rect x="469" y="112" width="206" height="58" rx="8" fill="#fdf3dd" stroke="#c98a12"/>
+  <text x="481" y="133" font-weight="700" fill="#8a5d00">SQLite writer thread (1)</text><text x="481" y="153">queue.Queue in, 1 transaction/job</text>
+  <text x="25" y="200" font-weight="700">Processes 2..N+1 — ProcessPoolExecutor workers (spawn)</text>
+  <rect x="25" y="212" width="200" height="90" rx="8" fill="#e6f4ec" stroke="#1f7a4d"/>
+  <text x="37" y="233" font-weight="700" fill="#1f7a4d">Worker A (PID 7836)</text><text x="37" y="252">analyze_segment(task)</text><text x="37" y="269">reads 4 KB frames from pipe</text><text x="37" y="286">pHash each → compact result</text>
+  <rect x="240" y="212" width="200" height="90" rx="8" fill="#e6f4ec" stroke="#1f7a4d"/>
+  <text x="252" y="233" font-weight="700" fill="#1f7a4d">Worker B (PID 23788)</text><text x="252" y="252">analyze_segment(task)</text><text x="252" y="269">its own interpreter + GIL</text><text x="252" y="286">its own memory</text>
+  <rect x="470" y="212" width="205" height="38" rx="6" fill="#fff" stroke="#5b6676"/><text x="482" y="235">FFmpeg subprocess (worker A)</text>
+  <rect x="470" y="260" width="205" height="38" rx="6" fill="#fff" stroke="#5b6676"/><text x="482" y="283">FFmpeg subprocess (worker B)</text>
+  <text x="25" y="334" fill="#5b6676">Communication: concurrent.futures.Future between the index thread and the workers (pickled SegmentTask → SegmentResult);</text>
+  <text x="25" y="350" fill="#5b6676">pipes between workers and FFmpeg; HTTP on 127.0.0.1 between the browser and process 1. No hand-written sockets, no other machine.</text>
+</svg>
+<figcaption>Figure 4 — Every execution unit of the running application. Processes compute; threads wait (for requests, disk, subprocesses, futures).</figcaption>
+</figure>
+
+<h2>7.2 The life of an indexing request</h2>
+<ol>
+  <li><strong>Browser</strong> sends <code>POST /api/movies</code> (multipart). A size limit rejects an oversized upload with 413 before reading it.</li>
+  <li>FastAPI runs the route <code>import_movie</code> (a plain <code>def</code>) in a <strong>request thread</strong>. It calls
+  <code>ctx.io.call(stage_stream, …)</code>: an <strong>I/O thread</strong> copies the upload into <code>data/temp</code> by 1 MB blocks while
+  computing SHA-256, then runs ffprobe. The request thread simply waits for the result.</li>
+  <li>The request thread calls <code>ctx.writer.run_sync(register_staged)</code>: the <strong>writer thread</strong> checks "same SHA-256 already
+  known?", renames the file atomically into <code>data/media/movies/</code> and inserts the row — one transaction.</li>
+  <li><code>jobs.submit_index()</code> puts the job id in the bounded <code>queue.Queue</code> and the HTTP response returns immediately:
+  <strong>202 Accepted</strong> + job id.</li>
+  <li>The <strong>index worker thread</strong> takes the job, asks the writer to <code>prepare_index</code> (which segments are missing?), then keeps a
+  window of <code>2 × workers</code> segment futures in the <strong>process pool</strong>, waiting with
+  <code>concurrent.futures.wait(FIRST_COMPLETED)</code>.</li>
+  <li>Each <strong>worker process</strong> runs <code>analyze_segment</code>, which drives its own <strong>FFmpeg</strong> and returns hashes + timestamps.</li>
+  <li>Each finished future → <code>writer.run_sync(save_segment_result)</code>: fingerprints and band rows inserted in one transaction; then the
+  in-memory progress is updated <strong>under the job-table lock</strong>.</li>
+  <li>The <strong>browser polls</strong> <code>GET /api/jobs/{id}</code> every second; another request thread takes a snapshot under the lock and answers in
+  ~4 ms (median, measured during indexing).</li>
+  <li>When all segments are done, <code>finalize_index</code> verifies the counts and only then marks the film <code>indexed</code>.</li>
+</ol>
+
+<h2>7.3 The process pool</h2>
+<pre><span class="c"># backend/app/concurrency/process_pool.py</span>
+<span class="k">class</span> LocalProcessPool:
+    <span class="k">def</span> __init__(self, workers):
+        self._ctx = mp.get_context(<span class="s">"spawn"</span>)          <span class="c"># same behaviour on Windows and Linux</span>
+        self._abort = self._ctx.Event()                  <span class="c"># shutdown signal for running segments</span>
+    <span class="k">def</span> _create(self):
+        barrier = self._ctx.Barrier(self.workers)       <span class="c"># warm-up proof of N processes</span>
+        <span class="k">return</span> ProcessPoolExecutor(max_workers=self.workers, mp_context=self._ctx,
+                                   initializer=worker_initializer, initargs=(self._abort, barrier))
+    <span class="k">def</span> start(self, warmup=True):
+        self._executor = self._create()
+        futures = [self._executor.submit(worker_ping, True) <span class="k">for</span> _ <span class="k">in</span> range(self.workers)]
+        self.pids = sorted({f.result(timeout=180) <span class="k">for</span> f <span class="k">in</span> futures})   <span class="c"># real PIDs, shown in the UI</span></pre>
+<p><code>worker_initializer</code> limits OpenCV/NumPy to one thread per process and stores the Event and Barrier.
+<code>worker_ping(True)</code> waits on the barrier: it can only return when N pings run <em>simultaneously</em>, which is impossible
+unless N distinct processes exist. If a worker crashes (out of memory, for example), <code>BrokenProcessPool</code> is caught
+and the pool is recreated once.</p>
+
+<h2>7.4 Why ProcessPoolExecutor and not multiprocessing.Pool?</h2>
+<p>Both are pools of processes communicating through queues. <code>ProcessPoolExecutor</code> returns <code>concurrent.futures.Future</code>
+objects: the index thread can wait for "whichever segment finishes first" with <code>concurrent.futures.wait(FIRST_COMPLETED)</code> and cancel
+individual segments that have not started (<code>Future.cancel()</code>). The assignment asked to pick one and justify it; we use only this one.</p>
+
+<h2>7.5 The bounded sliding window and cooperative cancellation</h2>
+<pre><span class="c"># backend/app/concurrency/job_manager.py — runs in the INDEX WORKER THREAD</span>
+<span class="k">while</span> backlog <span class="k">or</span> pending:
+    <span class="k">while</span> backlog <span class="k">and</span> len(pending) &lt; window <span class="k">and</span> error <span class="k">is None and not</span> self._cancelled(job):
+        todo_item, task = backlog.pop(0)
+        pending[ctx.pool.submit(analyze_segment, task)] = todo_item     <span class="c"># Future from the process pool</span>
+    done, _ = wait(pending, return_when=FIRST_COMPLETED)                <span class="c"># this thread sleeps, GIL released</span>
+    <span class="k">for</span> fut <span class="k">in</span> done: ... ctx.writer.run_sync(save_segment_result ...)
+    <span class="k">if</span> error <span class="k">or</span> self._cancelled(job):
+        backlog.clear()
+        <span class="k">for</span> fut <span class="k">in</span> pending:
+            fut.cancel()   <span class="c"># succeeds only for segments not yet started; running ones finish and are saved</span></pre>
+<p>The window bounds memory (never hundreds of queued tasks) and makes cancellation quick. Because finished segments are saved,
+a later re-index resumes and computes only what is missing — tested in <code>test_cancel_then_resume_indexing</code>.</p>
+
+<h2>7.6 The job manager: three kinds of background threads</h2>
+<pre><span class="c"># backend/app/concurrency/job_manager.py (simplified)</span>
+self._index_queue = queue.Queue(maxsize=s.max_queued_jobs)        <span class="c"># bounded: 503 when full</span>
+self._index_threads = [threading.Thread(target=self._index_worker, daemon=<span class="k">False</span>)
+                       <span class="k">for</span> i <span class="k">in</span> range(s.max_active_index_jobs)]
+self._search_pool = ThreadPoolExecutor(max_workers=s.max_active_search_jobs)   <span class="c"># 2 searches at most</span>
+
+<span class="k">def</span> _index_worker(self):
+    <span class="k">while True</span>:
+        job_id = self._index_queue.get()
+        <span class="k">if</span> job_id <span class="k">is None</span>:                     <span class="c"># sentinel: clean stop</span>
+            <span class="k">return</span>
+        <span class="k">with</span> self._cpu_slot(exclusive=<span class="k">False</span>):  <span class="c"># threading.Condition: not during a benchmark</span>
+            self._run_index(job)</pre>
+<ul>
+  <li><strong>Indexing</strong>: producer–consumer. Request threads produce job ids; <code>MAX_ACTIVE_INDEX_JOBS</code> threads consume them. A film
+  already queued or running is never indexed twice.</li>
+  <li><strong>Search</strong>: the 2 threads of the pool <em>are</em> the limit on simultaneous searches — no extra semaphore.</li>
+  <li><strong>Benchmark</strong>: one thread; a <code>threading.Condition</code> gives it exclusive use of the CPU
+  (<code>with cond: cond.wait_for(lambda: running_index_jobs == 0)</code>), and indexing waits while a benchmark runs.</li>
+  <li><strong>End of a job</strong>: one <code>threading.Event</code> per job; deleting a film being indexed cancels its job, then
+  <code>job.done.wait(timeout)</code>.</li>
+  <li><strong>Shutdown</strong>: refuse new jobs, cancel queued ones, one <code>None</code> sentinel per index thread, bounded <code>join()</code>;
+  then the process pool is shut down (its Event interrupts running segments) and the threads are joined again.</li>
+</ul>
+
+<h2>7.7 The single writer thread</h2>
+<pre><span class="c"># backend/app/db/writer.py (simplified)</span>
+<span class="k">def</span> submit(self, fn, *, block=<span class="k">False</span>):
+    <span class="k">if</span> self._closed.is_set(): <span class="k">raise</span> WriterClosed(...)        <span class="c"># threading.Event</span>
+    fut = Future()
+    self._queue.put_nowait((fn, fut))                     <span class="c"># full queue → WriterBusy → HTTP 503</span>
+    <span class="k">return</span> fut
+<span class="k">def</span> run_sync(self, fn):
+    <span class="k">return</span> self.submit(fn, block=<span class="k">True</span>).result()          <span class="c"># the producer thread waits for its write</span>
+<span class="k">def</span> _run(self):                                         <span class="c"># the only thread that writes to SQLite</span>
+    <span class="k">while True</span>:
+        item = self._queue.get()
+        <span class="k">if</span> item <span class="k">is</span> _STOP: <span class="k">return</span>
+        fn, fut = item
+        <span class="k">with</span> self._session_factory() <span class="k">as</span> s, s.begin():       <span class="c"># all-or-nothing transaction</span>
+            fut.set_result(fn(s))</pre>
+<ul>
+  <li>No <code>Lock</code>: <code>queue.Queue</code> is already thread-safe.</li>
+  <li>Closing: set the Event (refuse new work), put the sentinel <em>at the end</em> of the FIFO (so everything before it is written),
+  <code>join()</code> the thread. The thread is non-daemon, so Python waits for it.</li>
+</ul>
+
+<h2>7.8 The job table: a genuinely shared structure, and a real race we avoided</h2>
+<p>With threads, the job table <em>is</em> shared: index/search threads write progress, request threads read it for polling. Every read and
+write goes through one <code>threading.Lock</code>, in a <strong>short critical section</strong> — never while computing or waiting for a write:</p>
+<pre><span class="k">with</span> self._lock:              <span class="c"># index thread: progress update</span>
+    job.completed_units += 1
+    job.pids.add(res.pid)
+
+<span class="k">def</span> snapshot(self, job_id):    <span class="c"># request thread: consistent copy for the API</span>
+    <span class="k">with</span> self._lock:
+        <span class="k">return</span> self._jobs[job_id].to_dict()</pre>
+<p>Without the lock, a reader could see a half-updated job, or crash with "set changed size during iteration" while copying the PID set.</p>
+<div class="box warn"><span class="tag">A real race condition, found while designing the refactor</span>
+<p>Two threads persist the same job: the index thread writes "completed", and another thread writes an older snapshot ("running"). If each took
+its snapshot and then queued its write separately, the old snapshot could be queued <em>after</em> the new one and overwrite the final state in the
+database. Fix: take the snapshot <strong>and</strong> put it in the writer's FIFO queue <strong>inside the same critical section</strong>; the queue
+order is then the state order. Tested: after a restart the job read back from the database is <code>completed</code>, and 4 threads polling
+during an indexing never see progress go backwards or exceed the total.</p></div>
+
+<h2>7.9 Where shared state lives, and how it is protected</h2>
+<table>
+<tr><th>Shared state</th><th>Who touches it</th><th>Protection</th></tr>
+<tr><td>SQLite main database</td><td>writer thread (writes), any thread (reads)</td><td>single writer + WAL (readers never block the writer)</td></tr>
+<tr><td>Job table (<code>JobManager._jobs</code>)</td><td>request threads (read), job threads (write)</td><td><code>threading.Lock</code>, short critical sections; snapshot + queued write atomic</td></tr>
+<tr><td>Thumbnail being generated</td><td>several I/O threads</td><td><code>KeyedLocks</code>: a dict of locks guarded by a <code>Lock</code></td></tr>
+<tr><td>Benchmark RAM/CPU samples</td><td>sampler thread + benchmark thread</td><td><code>threading.Lock</code> + <code>Event</code> to stop</td></tr>
+<tr><td>Segment results</td><td>worker process → index thread</td><td>immutable copies through futures (no sharing at all)</td></tr>
+<tr><td>Writer queue, index queue</td><td>request threads, job threads, scripts</td><td><code>queue.Queue</code> (built-in locking)</td></tr>
+<tr><td>CPU exclusivity (benchmark vs indexing)</td><td>index threads, benchmark thread</td><td><code>threading.Condition</code> with a predicate</td></tr>
+</table>
+
+<h2>7.10 What we deliberately did NOT use, and why</h2>
+<ul>
+  <li><strong>asyncio</strong>: not needed for a few concurrent requests and jobs; threads are simpler (section 6.11).</li>
+  <li><strong>Threads for hashing</strong>: the GIL would serialize the Python part; processes are the right tool for CPU work.</li>
+  <li><strong><code>multiprocessing.Queue</code>/<code>Pipe</code></strong>: futures already carry tasks and results.</li>
+  <li><strong>Shared memory</strong>: results are tiny; copying is cheaper and safer than sharing.</li>
+  <li><strong><code>Semaphore</code></strong>: the size of each thread pool already bounds concurrency.</li>
+  <li><strong>Several Uvicorn workers</strong>: would duplicate the pool, the RAM and the SQLite writer.</li>
+  <li><strong>WebSockets / custom sockets</strong>: HTTP polling every second is enough.</li>
+  <li><strong><code>RLock</code></strong>: no code path re-acquires a lock it already holds.</li>
+</ul>

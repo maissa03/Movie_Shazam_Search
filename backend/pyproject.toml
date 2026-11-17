@@ -1,0 +1,31 @@
+[project]
+name = "movieshazam-backend"
+version = "1.0.0"
+description = "MovieShazam : identification locale d'extraits vidéo (pHash + alignement temporel)"
+requires-python = ">=3.11,<3.13"
+# Versions exactes figées dans ../requirements.txt (reproductibilité)
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "-ra"
+timeout = 600
+markers = [
+    "slow: tests longs (corpus de démonstration complet, ~1-2 min)",
+    "e2e: test de bout en bout Next.js -> FastAPI (nécessite Node.js et un build du frontend)",
+]
+filterwarnings = [
+    "error::sqlalchemy.exc.SADeprecationWarning",
+    "ignore:Using `httpx` with `starlette.testclient`",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM"]
+ignore = ["B008", "B905", "SIM105", "SIM108", "UP040"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B011"]

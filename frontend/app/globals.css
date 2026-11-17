@@ -1,0 +1,97 @@
+@import "tailwindcss";
+
+/* Thème sombre MovieShazam : tons ardoise + accent ambre « salle de cinéma ». */
+@theme {
+  --font-sans: "Segoe UI Variable", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "Cascadia Code", "Consolas", ui-monospace, monospace;
+  --color-ink-950: #07090d;
+  --color-ink-900: #0d1117;
+  --color-ink-850: #121823;
+  --color-ink-800: #18202c;
+  --color-ink-700: #243041;
+  --color-ink-600: #334155;
+  --color-accent: #f5b544;
+  --color-accent-strong: #ffcc66;
+}
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body {
+  background: var(--color-ink-950);
+  color: #e6e9ef;
+}
+
+body {
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: rgb(245 181 68 / 0.35);
+}
+
+/* Classes de composants (Tailwind v4 : @utility pour pouvoir les combiner avec @apply). */
+@utility card {
+  @apply rounded-2xl border border-ink-700/70 bg-ink-900/80 shadow-[0_1px_0_0_rgb(255_255_255/0.03)_inset];
+}
+
+@utility btn {
+  @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2 text-sm font-medium transition
+    disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent;
+}
+@utility btn-primary {
+  @apply btn bg-accent text-ink-950 hover:bg-accent-strong;
+}
+@utility btn-ghost {
+  @apply btn border border-ink-700 bg-ink-850 text-slate-200 hover:border-ink-600 hover:bg-ink-800;
+}
+@utility btn-danger {
+  @apply btn border border-rose-500/30 bg-rose-500/10 text-rose-200 hover:bg-rose-500/20;
+}
+
+@utility input {
+  @apply w-full rounded-xl border border-ink-700 bg-ink-850 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500
+    focus:border-accent/60 focus:outline-none focus:ring-2 focus:ring-accent/20;
+}
+
+@utility label {
+  @apply text-xs font-medium uppercase tracking-wider text-slate-400;
+}
+
+@keyframes shimmer {
+  from {
+    background-position: -200% 0;
+  }
+  to {
+    background-position: 200% 0;
+  }
+}
+.animate-shimmer {
+  background-image: linear-gradient(90deg, transparent, rgb(255 255 255 / 0.18), transparent);
+  background-size: 200% 100%;
+  animation: shimmer 1.6s linear infinite;
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.animate-fade-in {
+  animation: fade-in 0.25s ease-out both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-shimmer,
+  .animate-fade-in {
+    animation: none;
+  }
+}

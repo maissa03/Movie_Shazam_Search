@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import csv
-import io
 import json
 import platform
 import shutil
@@ -10,13 +8,12 @@ import uuid
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, Response
 from fastapi.routing import APIRoute
 from sqlalchemy import text
 from starlette.middleware.body_limit import RequestBodyLimitMiddleware
 
 from app.api.schemas import (
-    BenchmarkRunIn,
     DeleteOut,
     HealthOut,
     ImportOut,
@@ -33,7 +30,6 @@ from app.concurrency.job_manager import NotAccepting, QueueFull, job_row_to_dict
 from app.concurrency.thread_io import UploadTooLarge, safe_child
 from app.db import repo
 from app.db.writer import WriterBusy, WriterClosed
-from app.services import benchmark as bench
 from app.services import library
 from app.video.ffmpeg_io import FFmpegError, FFmpegNotFound, ffmpeg_version, find_binary
 
@@ -305,7 +301,7 @@ def get_job(request: Request, job_id: str) -> JobOut:
     if snap is not None:
         return JobOut(**snap)
     row = ctx.read(lambda s: repo.get_job(s, job_id))
-    if row is None:
+    if row is None or row.kind not in repo.JOB_KINDS:
         raise HTTPException(404, "job introuvable")
     return JobOut(**job_row_to_dict(row))
 
@@ -317,84 +313,6 @@ def cancel_job(request: Request, job_id: str) -> JobOut:
     if snap is None:
         raise HTTPException(404, "job introuvable ou déjà archivé")
     return JobOut(**snap)
-
-
-@router.get("/benchmarks", summary="Résultats de benchmarks enregistrés (vraies mesures)")
-def list_benchmarks(request: Request) -> dict:
-    ctx = _ctx(request)
-    rows = ctx.read(lambda s: repo.list_benchmarks(s))
-    runs: dict[str, dict] = {}
-    for r in rows:
-        run = runs.setdefault(r.run_id, {"run_id": r.run_id, "created_at": r.created_at.isoformat() + "Z",
-                                         "dataset_id": r.dataset_id, "index": [], "recall": None, "machine": None})
-        metrics = json.loads(r.metrics_json or "{}")
-        if r.kind == "index":
-            run["machine"] = metrics.pop("machine", run["machine"])
-            run["corpus"] = metrics.pop("corpus", None)
-            run["segments"] = metrics.pop("segments", None)
-            run["index"].append(metrics)
-        elif r.kind == "search":
-            run["recall"] = metrics
-    for run in runs.values():
-        run["index"].sort(key=lambda x: (x["mode"] != "sequential", x["process_count"]))
-    return {"runs": sorted(runs.values(), key=lambda x: x["created_at"], reverse=True),
-            "machine": bench.machine_info(ctx.settings)}
-
-
-@router.post("/benchmarks/run", response_model=JobOut, status_code=202, summary="Lancer un benchmark local")
-def run_benchmark(request: Request, body: BenchmarkRunIn) -> JobOut:
-    ctx = _ctx(request)
-    s = ctx.settings
-    cpus = __import__("os").cpu_count() or 1
-    modes = sorted({m for m in body.modes if 0 <= m <= cpus})
-    if not modes:
-        raise HTTPException(422, "aucun mode valide")
-    movies = ctx.read(lambda ss: [m for m in repo.list_movies(ss, status="indexed")
-                                        if body.movie_ids is None or m.id in body.movie_ids])
-    if not movies:
-        raise HTTPException(422, "aucun film indexé : importez et indexez au moins un film")
-    items = [bench.CorpusItem(library.movie_path(m, s), m.duration_ms, m.title, m.content_hash) for m in movies]
-    ds = bench.dataset_id(items, s)
-    run_id = uuid.uuid4().hex
-
-    def runner(publish):  # noqa: ANN001, ANN202 - exécuté par le thread du benchmark
-        machine = bench.machine_info(s)
-        result = bench.run_index_benchmark(items, s, modes, body.repeats, publish)
-        rows = bench.summarize_for_db(run_id, ds, result, machine)
-        if body.include_recall:
-            publish({"stage": "rappel de l'index par bandes vs exhaustive"})
-            recall = bench.run_band_recall_benchmark(ctx.session_factory, s, ctx.params)
-            rows.append({"run_id": run_id, "kind": "search", "mode": "bands-recall", "process_count": 1,
-                         "dataset_id": ds, "elapsed_ms": recall.get("exhaustive_ms_same_queries", 0) or 0,
-                         "metrics_json": json.dumps(recall)})
-        ctx.writer.run_sync(lambda ss: repo.add_benchmark_rows(ss, rows))
-        return {"run_id": run_id}
-
-    try:
-        job = ctx.jobs.submit_benchmark(f"Benchmark {len(items)} film(s), modes {modes}", runner)
-    except (QueueFull, NotAccepting) as exc:
-        raise HTTPException(409, str(exc)) from exc
-    return JobOut(**job)
-
-
-@router.get("/benchmarks/export", summary="Export CSV ou JSON des benchmarks")
-def export_benchmarks(request: Request, format: Literal["csv", "json"] = "json",
-                            run_id: str | None = None) -> Response:
-    data = list_benchmarks(request)
-    runs = [r for r in data["runs"] if run_id is None or r["run_id"] == run_id]
-    if format == "json":
-        return JSONResponse({"runs": runs}, headers={"Content-Disposition": "attachment; filename=benchmarks.json"})
-    buf = io.StringIO()
-    cols = ["run_id", "created_at", "dataset_id", "mode", "process_count", "elapsed_ms_median", "write_ms_median",
-            "speedup", "efficiency", "frames_per_s", "fingerprints_per_s", "peak_ram_mb", "busy_cores_avg",
-            "identical_to_sequential"]
-    w = csv.writer(buf)
-    w.writerow(cols)
-    for r in runs:
-        for x in r["index"]:
-            w.writerow([r["run_id"], r["created_at"], r["dataset_id"], *[x.get(c) for c in cols[3:]]])
-    return Response(buf.getvalue(), media_type="text/csv",
-                    headers={"Content-Disposition": "attachment; filename=benchmarks.csv"})
 
 
 @router.get("/media/{movie_id}/thumbnail", summary="Vignette d'un film géré")

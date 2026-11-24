@@ -141,17 +141,5 @@ class Search(Base):
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
 
 
-class Benchmark(Base):
-    __tablename__ = "benchmarks"
-
-    id: Mapped[int] = mapped_column(primary_key=True)
-    run_id: Mapped[str] = mapped_column(String(32), index=True)
-    kind: Mapped[str] = mapped_column(String(20), default="index")
-    mode: Mapped[str] = mapped_column(String(30))
-    process_count: Mapped[int] = mapped_column(Integer)
-    dataset_id: Mapped[str] = mapped_column(String(64))
-    elapsed_ms: Mapped[float] = mapped_column(Float)
-    frames_count: Mapped[int] = mapped_column(Integer, default=0)
-    peak_ram_mb: Mapped[float | None] = mapped_column(Float, nullable=True)
-    metrics_json: Mapped[str] = mapped_column(Text, default="{}")
-    created_at: Mapped[datetime] = mapped_column(default=utcnow)
+# La table « benchmarks » des anciennes bases n'est plus mappée : create_all() ne la crée plus
+# et ne la supprime pas non plus (aucune migration destructive, les mesures déjà enregistrées restent).

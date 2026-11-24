@@ -7,13 +7,16 @@ from datetime import timedelta
 from sqlalchemy import delete, func, insert, or_, select, update
 from sqlalchemy.orm import Session
 
-from app.db.models import Benchmark, Fingerprint, FingerprintBand, Job, Movie, Search, Segment, utcnow
+from app.db.models import Fingerprint, FingerprintBand, Job, Movie, Search, Segment, utcnow
 from app.video.fingerprint import bands, to_blob
 from app.video.pipeline import SegmentResult
 from app.video.segmentation import SegmentPlan
 
 BAND_MIN_INFORMATIVENESS = 2.0
 MOVIE_STATUSES = ("pending", "indexing", "indexed", "failed", "cancelled")
+# Types de jobs gérés par l'application. Les anciennes lignes kind="benchmark" restent dans SQLite
+# mais ne sont plus lues ni modifiées.
+JOB_KINDS = ("index", "search")
 
 
 def get_movie(s: Session, movie_id: int) -> Movie | None:
@@ -209,14 +212,14 @@ def get_job(s: Session, job_id: str) -> Job | None:
 
 
 def list_jobs(s: Session, limit: int = 100, kind: str | None = None) -> list[Job]:
-    stmt = select(Job).order_by(Job.created_at.desc()).limit(limit)
+    stmt = select(Job).where(Job.kind.in_(JOB_KINDS)).order_by(Job.created_at.desc()).limit(limit)
     if kind:
         stmt = stmt.where(Job.kind == kind)
     return list(s.scalars(stmt))
 
 
 def fail_interrupted_jobs(s: Session) -> int:
-    jobs = list(s.scalars(select(Job).where(Job.state.in_(("queued", "running")))))
+    jobs = list(s.scalars(select(Job).where(Job.kind.in_(JOB_KINDS), Job.state.in_(("queued", "running")))))
     for job in jobs:
         job.state = "failed"
         job.error = "interrompu par l'arrêt de l'application (les segments terminés sont conservés)"
@@ -231,7 +234,7 @@ def fail_interrupted_jobs(s: Session) -> int:
 
 
 def prune_jobs(s: Session, keep_days: int = 30) -> None:
-    s.execute(delete(Job).where(Job.finished_at < utcnow() - timedelta(days=keep_days)))
+    s.execute(delete(Job).where(Job.kind.in_(JOB_KINDS), Job.finished_at < utcnow() - timedelta(days=keep_days)))
 
 
 def save_search(s: Session, **fields) -> Search:
@@ -252,14 +255,6 @@ def get_search(s: Session, search_id: str) -> Search | None:
 
 def list_searches(s: Session, limit: int = 20) -> list[Search]:
     return list(s.scalars(select(Search).order_by(Search.created_at.desc()).limit(limit)))
-
-
-def add_benchmark_rows(s: Session, rows: list[dict]) -> None:
-    s.add_all(Benchmark(**r) for r in rows)
-
-
-def list_benchmarks(s: Session, limit: int = 500) -> list[Benchmark]:
-    return list(s.scalars(select(Benchmark).order_by(Benchmark.created_at.desc(), Benchmark.id).limit(limit)))
 
 
 def library_stats(s: Session) -> dict:

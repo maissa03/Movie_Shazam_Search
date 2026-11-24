@@ -9,7 +9,7 @@ import type { Job } from "@/lib/types";
 import { usePolling } from "@/lib/usePolling";
 import { EmptyState, ErrorBox, PageHeader, ProgressBar, StatCard, StatusBadge } from "@/components/ui";
 
-const KIND: Record<Job["kind"], string> = { index: "Indexation", search: "Recherche", benchmark: "Benchmark" };
+const KIND: Record<Job["kind"], string> = { index: "Indexation", search: "Recherche" };
 
 export default function JobsPage() {
   const [kind, setKind] = useState("");
@@ -34,7 +34,7 @@ export default function JobsPage() {
 
   return (
     <>
-      <PageHeader title="Traitements" subtitle="Jobs locaux d’indexation, de recherche et de benchmark : progression réelle (segments terminés / total), processus CPU utilisés, erreurs et annulation coopérative." />
+      <PageHeader title="Traitements" subtitle="Jobs locaux d’indexation et de recherche : progression réelle (segments terminés / total), processus CPU utilisés, erreurs et annulation coopérative." />
 
       <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <StatCard label="Pool de processus" icon={<Cpu className="size-4" />} value={health?.concurrency.process_workers ?? "—"} hint={health ? `PID ${health.concurrency.worker_pids.join(", ")}` : undefined} />
@@ -48,7 +48,6 @@ export default function JobsPage() {
           ["", "Tous"],
           ["index", "Indexations"],
           ["search", "Recherches"],
-          ["benchmark", "Benchmarks"],
         ].map(([v, l]) => (
           <button key={v} onClick={() => setKind(v)} className={`rounded-full px-3 py-1 text-xs transition ${kind === v ? "bg-accent text-ink-950" : "bg-ink-850 text-slate-400 hover:text-slate-100"}`}>
             {l}
@@ -60,7 +59,7 @@ export default function JobsPage() {
         {error && <ErrorBox message={error} onRetry={refresh} />}
         {jobs && jobs.length === 0 && (
           <EmptyState icon={<Layers className="size-5" />} title="Aucun traitement">
-            Les jobs apparaissent ici dès qu’un film est importé, qu’une recherche est lancée ou qu’un benchmark démarre.
+            Les jobs apparaissent ici dès qu’un film est importé ou qu’une recherche est lancée.
           </EmptyState>
         )}
         {jobs?.map((j) => (
@@ -87,7 +86,7 @@ export default function JobsPage() {
               </div>
               <div className="flex items-center gap-3">
                 <StatusBadge status={j.state} />
-                {(j.state === "queued" || j.state === "running") && j.kind !== "benchmark" && (
+                {(j.state === "queued" || j.state === "running") && (
                   <button className="btn-danger px-3 py-1 text-xs" disabled={cancelling === j.id || j.cancel_requested} onClick={() => cancel(j)}>
                     <Ban className="size-3.5" /> {j.cancel_requested ? "Annulation…" : "Annuler"}
                   </button>

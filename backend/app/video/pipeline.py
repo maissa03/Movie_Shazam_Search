@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import signal
 import time
 from dataclasses import dataclass, field
 
@@ -96,6 +97,9 @@ def analyze_segment(task: SegmentTask) -> SegmentResult:
 
 def worker_initializer(abort_event=None, barrier=None) -> None:  # noqa: ANN001
     global _ABORT_EVENT, _BARRIER
+    # Ctrl+C est envoyé à tous les processus de la console : les workers l'ignorent et laissent le processus
+    # principal piloter l'arrêt (abort_event.set() puis pool.close() + pool.join() dans LocalProcessPool.shutdown).
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
     os.environ.setdefault("OMP_NUM_THREADS", "1")
     os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
     os.environ.setdefault("MKL_NUM_THREADS", "1")

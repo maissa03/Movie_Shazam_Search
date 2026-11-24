@@ -56,7 +56,7 @@ export interface MovieDetail extends Movie {
 
 export interface Job {
   id: string;
-  kind: "index" | "search" | "benchmark";
+  kind: "index" | "search";
   label: string;
   movie_id: number | null;
   state: JobState;
@@ -181,62 +181,4 @@ export interface Stats {
   }[];
   active_jobs: Job[];
   process_workers: number;
-}
-
-export interface BenchIndexRow {
-  mode: "sequential" | "parallel";
-  process_count: number;
-  label: string;
-  elapsed_ms_median: number;
-  elapsed_ms_all: number[];
-  write_ms_median: number;
-  speedup: number;
-  efficiency: number;
-  frames_per_s: number;
-  fingerprints_per_s: number;
-  peak_ram_mb: number;
-  cpu_percent_avg: number;
-  busy_cores_avg: number;
-  distinct_pids: number[];
-  identical_to_sequential: boolean;
-  pool_startup_ms: number;
-}
-
-export interface RecallPoint {
-  probe_radius: number;
-  distance: number;
-  recall: number;
-  band_ms: number;
-  rows_scanned: number;
-}
-
-export interface BenchRun {
-  run_id: string;
-  created_at: string;
-  dataset_id: string;
-  index: BenchIndexRow[];
-  corpus?: { label: string; duration_ms: number }[];
-  segments?: number;
-  machine: Machine | null;
-  recall: {
-    available: boolean;
-    samples?: number;
-    index_size?: number;
-    curve?: RecallPoint[];
-    exhaustive_ms_same_queries?: number;
-    search?: { method: string; clips: number; correct: number; search_ms_mean: number; search_ms_median: number }[];
-    scaling?: { distractors: number; index_fingerprints: number; bands_ms_median: number; exhaustive_ms_median: number; bands_correct: string; exhaustive_correct: string }[];
-  } | null;
-}
-
-export interface Machine {
-  cpu: string;
-  physical_cores: number;
-  logical_cpus: number;
-  ram_total_gb: number;
-  ram_available_gb: number;
-  os: string;
-  python: string;
-  ffmpeg: string;
-  engine: Record<string, string | number>;
 }

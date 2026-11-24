@@ -2,14 +2,13 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Activity, Clapperboard, Gauge, LayoutDashboard, Library, ScanSearch } from "lucide-react";
+import { Activity, Clapperboard, LayoutDashboard, Library, ScanSearch } from "lucide-react";
 
 const NAV = [
   { href: "/", label: "Tableau de bord", icon: LayoutDashboard },
   { href: "/reconnaissance", label: "Reconnaissance", icon: ScanSearch },
   { href: "/bibliotheque", label: "Bibliothèque", icon: Library },
   { href: "/traitements", label: "Traitements", icon: Activity },
-  { href: "/performances", label: "Performances", icon: Gauge },
 ];
 
 export function Sidebar() {

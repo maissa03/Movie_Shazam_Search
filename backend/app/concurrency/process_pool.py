@@ -57,6 +57,8 @@ class LocalProcessPool:
         self.pids: list[int] = []
 
     def _create(self) -> PoolRun:
+        # Sous Windows, multiprocessing utilise « spawn » : chaque worker est un nouvel interpréteur Python
+        # qui importe app.video.pipeline puis exécute worker_initializer(abort, barrier).
         self._abort = mp.Event()
         barrier = mp.Barrier(self.workers)
         pool = mp.Pool(self.workers, initializer=worker_initializer, initargs=(self._abort, barrier))
@@ -64,20 +66,22 @@ class LocalProcessPool:
         self.pids = sorted(p.pid for p in run.processes)
         return run
 
-    def start(self, warmup: bool = True) -> list[int]:
+    def start(self) -> list[int]:
         with self._lock:
             if self._run is None:
                 run = self._create()
                 try:
-                    if warmup:
-                        self.pids = sorted(set(run.pool.map_async(worker_ping, [True] * self.workers,
-                                                                  chunksize=1).get(timeout=180)))
+                    # Préchauffage : une tâche worker_ping par worker. La Barrier oblige chaque worker à
+                    # attendre les autres, donc les N pings sont servis par N processus distincts.
+                    self.pids = sorted(set(run.pool.map_async(worker_ping, [True] * self.workers,
+                                                              chunksize=1).get(timeout=180)))
                 except BaseException:
                     run.pool.terminate()
                     run.pool.join()
                     raise
                 self._run = run
-                log.info("pool de %d processus prêt, PID=%s", self.workers, self.pids)
+                log.info("[POOL] pool démarré : %d processus workers, PID %s", self.workers,
+                         ", ".join(map(str, self.pids)))
             return self.pids
 
     def apply_async(self, task: SegmentTask) -> SegmentWork:

@@ -6,9 +6,8 @@ import queue
 import threading
 import time
 import uuid
-from collections.abc import Callable, Generator
+from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
-from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -121,11 +120,6 @@ class JobManager:
         self._index_queue: queue.Queue[str | None] = queue.Queue(maxsize=s.max_queued_jobs)
         self._index_threads: list[threading.Thread] = []
         self._search_pool: ThreadPoolExecutor | None = None
-        self._bench_thread: threading.Thread | None = None
-        self._cpu = threading.Condition()
-        self._heavy_running = 0
-        self._exclusive_active = False
-        self._stopping = False
 
     def start(self) -> None:
         s = self.ctx.settings
@@ -146,9 +140,6 @@ class JobManager:
             for job in self._jobs.values():
                 if job.state not in TERMINAL:
                     job.cancel_requested = True
-        with self._cpu:
-            self._stopping = True
-            self._cpu.notify_all()
         while True:
             try:
                 job_id = self._index_queue.get_nowait()
@@ -165,18 +156,15 @@ class JobManager:
             t.join(max(0.0, deadline - time.monotonic()))
         if self._search_pool is not None:
             self._search_pool.shutdown(wait=True, cancel_futures=True)
-        if self._bench_thread is not None:
-            self._bench_thread.join(max(0.0, deadline - time.monotonic()))
         for job in self._live_jobs():
             if job.kind == "search":
                 self._search_failed(job, "cancelled", "arrêt de l'application")
 
     def join(self, timeout: float = 30.0) -> None:
-        threads = [*self._index_threads, *([self._bench_thread] if self._bench_thread else [])]
         deadline = time.monotonic() + timeout
-        for t in threads:
+        for t in self._index_threads:
             t.join(max(0.0, deadline - time.monotonic()))
-        alive = [t.name for t in threads if t.is_alive()]
+        alive = [t.name for t in self._index_threads if t.is_alive()]
         if alive:
             log.warning("threads encore actifs à l'arrêt : %s", alive)
 
@@ -284,22 +272,9 @@ class JobManager:
         except queue.Full as exc:
             self._finish(job, "failed", "file d'attente pleine")
             raise QueueFull("file d'attente pleine, réessayez plus tard") from exc
-        log.info("indexation en file", extra={"job_id": job.id, "movie_id": movie_id})
+        log.info("job %s mis dans la file d'indexation (film « %s »)", job.id[:8], label,
+                 extra={"job_id": job.id, "movie_id": movie_id})
         return self.snapshot(job.id) or {}, True
-
-    def submit_benchmark(self, label: str, runner: Callable[[Callable[[dict], None]], dict]) -> dict:
-        with self._lock:
-            if not self._accepting:
-                raise NotAccepting("l'application s'arrête")
-            if any(j.kind == "benchmark" and j.state not in TERMINAL for j in self._jobs.values()):
-                raise QueueFull("un benchmark est déjà en cours")
-            job = JobState(id=uuid.uuid4().hex, kind="benchmark", label=label)
-            self._jobs[job.id] = job
-        self._persist(job)
-        self._bench_thread = threading.Thread(target=self._run_benchmark, args=(job, runner), name="benchmark",
-                                              daemon=False)
-        self._bench_thread.start()
-        return self.snapshot(job.id) or {}
 
     def submit_search(self, clip_path: Path, clip_name: str, method: str) -> dict:
         with self._lock:
@@ -340,26 +315,9 @@ class JobManager:
         job.done.wait(timeout)
         return self.snapshot(job_id)
 
-    @contextmanager
-    def _cpu_slot(self, exclusive: bool) -> Generator[None, None, None]:
-        with self._cpu:
-            if exclusive:
-                self._cpu.wait_for(lambda: self._heavy_running == 0 and not self._exclusive_active)
-                self._exclusive_active = True
-            else:
-                self._cpu.wait_for(lambda: not self._exclusive_active or self._stopping)
-                self._heavy_running += 1
-        try:
-            yield
-        finally:
-            with self._cpu:
-                if exclusive:
-                    self._exclusive_active = False
-                else:
-                    self._heavy_running -= 1
-                self._cpu.notify_all()
-
     def _index_worker(self) -> None:
+        # Consommateur : chaque thread coordinateur retire un job_id de la file (bloquant) et l'indexe.
+        # La sentinelle None (déposée par stop()) termine la boucle.
         while True:
             job_id = self._index_queue.get()
             try:
@@ -375,12 +333,11 @@ class JobManager:
                 if cancelled:
                     self._cancel_queued(job)
                     continue
-                with self._cpu_slot(exclusive=False):
-                    try:
-                        self._run_index(job)
-                    except Exception as exc:  # noqa: BLE001 - jamais de job bloqué en « running »
-                        log.exception("indexation en échec", extra={"job_id": job.id, "movie_id": job.movie_id})
-                        self._fail_movie(job, f"erreur inattendue : {exc}")
+                try:
+                    self._run_index(job)
+                except Exception as exc:  # noqa: BLE001 - jamais de job bloqué en « running »
+                    log.exception("indexation en échec", extra={"job_id": job.id, "movie_id": job.movie_id})
+                    self._fail_movie(job, f"erreur inattendue : {exc}")
             finally:
                 self._index_queue.task_done()
 
@@ -436,10 +393,13 @@ class JobManager:
                                 "process_workers": ctx.pool.workers, "index_version": version})
             job.stage = f"empreintes : {len(todo)} segment(s) à calculer sur {ctx.pool.workers} processus"
         self._persist(job)
-        log.info("indexation démarrée (%s)", threading.current_thread().name,
+        log.info("[JOB] film « %s » pris en charge par le thread %s (job %s) : %d segment(s) à calculer",
+                 movie.title, threading.current_thread().name, job.id[:8], len(todo),
                  extra={"job_id": job.id, "movie_id": mid})
 
         backlog = [(t, build_task(path, t, s, mid, job.id)) for t in todo]
+        # Fenêtre glissante : le coordinateur soumet jusqu'à `window` segments (apply_async, non bloquant)
+        # avant d'attendre le premier résultat ; chaque résultat libère une place pour le segment suivant.
         window = ctx.pool.workers * s.max_inflight_segments_per_worker
         pending: dict[SegmentWork, repo.SegmentTodo] = {}
         error: str | None = None
@@ -474,8 +434,10 @@ class JobManager:
                     job.fingerprints += res.count
                     job.frames_decoded += res.frames_decoded
                     job.pids.add(res.pid)
-                log.info("segment terminé", extra={"job_id": job.id, "movie_id": mid, "segment": t.segment_index,
-                                                    "pid": res.pid, "elapsed_ms": int(res.wall_s * 1000)})
+                    done, total = job.completed_units, job.total_units
+                log.info("[SEGMENT] segment %d terminé par le processus PID %d (%d empreintes en %.1f s) — %d/%d",
+                         t.segment_index, res.pid, res.count, res.wall_s, done, total,
+                         extra={"job_id": job.id, "movie_id": mid, "segment": t.segment_index, "pid": res.pid})
             if error or self._cancelled(job):
                 backlog.clear()
         with self._lock:
@@ -491,7 +453,10 @@ class JobManager:
             ok, msg = ctx.writer.run_sync(lambda ss: repo.finalize_index(ss, mid, version))
             if ok:
                 self._finish(job, "completed")
-                log.info("indexation terminée", extra={"job_id": job.id, "movie_id": mid})
+                with self._lock:
+                    done, total, n_fp = job.completed_units, job.total_units, job.fingerprints
+                log.info("[FIN] indexation terminée : « %s », %d/%d segments terminés, %d empreintes (job %s)",
+                         movie.title, done, total, n_fp, job.id[:8], extra={"job_id": job.id, "movie_id": mid})
             else:
                 self._finish(job, "failed", msg)
 
@@ -571,26 +536,3 @@ class JobManager:
             log.exception("persistance de la recherche impossible", extra={"job_id": job.id})
         finally:
             self._finish(job, state, message)
-
-    def _run_benchmark(self, job: JobState, runner: Callable[[Callable[[dict], None]], dict]) -> None:
-        def publish(update: dict) -> None:
-            with self._lock:
-                for k in ("stage", "completed_units", "total_units"):
-                    if k in update:
-                        setattr(job, k, update[k])
-                job.pids.update(update.get("pids", ()))
-
-        try:
-            with self._lock:
-                job.stage = "attente de l'exclusivité CPU (fin des indexations en cours)"
-            with self._cpu_slot(exclusive=True):
-                if not self._start(job, "benchmark en cours"):
-                    self._finish(job, "cancelled", "arrêt de l'application")
-                    return
-                result = runner(publish)
-                with self._lock:
-                    job.details.update({"run_id": result.get("run_id")})
-                self._finish(job, "completed")
-        except Exception as exc:  
-            log.exception("benchmark en échec", extra={"job_id": job.id})
-            self._finish(job, "failed", str(exc))

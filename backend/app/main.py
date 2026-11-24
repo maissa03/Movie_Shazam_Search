@@ -67,7 +67,7 @@ def startup(settings: Settings) -> AppContext:
     engine = make_engine(settings.database_path)
     init_db(engine)
     sf = make_session_factory(engine)
-    ###############thread that writes into the db
+    # Thread unique d'écriture SQLite (DbWriter hérite de threading.Thread) : start() lance DbWriter.run().
     writer = DbWriter(sf)
     writer.start()
     pool: LocalProcessPool | None = None
@@ -92,8 +92,8 @@ def startup(settings: Settings) -> AppContext:
         writer.close()
         engine.dispose()
         raise
-    log.info("MovieShazam prêt sur http://%s:%d (%d processus, PID %s)", settings.app_host, settings.app_port,
-             pool.workers, pool.pids)
+    log.info("MovieShazam prêt sur http://%s:%d (writer SQLite, %d thread(s) E/S, %d processus de calcul)",
+             settings.app_host, settings.app_port, io.threads, pool.workers)
     return ctx
 
 

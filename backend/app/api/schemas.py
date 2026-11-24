@@ -147,14 +147,6 @@ class SearchStartOut(BaseModel):
     job: JobOut
 
 
-class BenchmarkRunIn(BaseModel):
-    modes: list[int] = Field(default_factory=lambda: [0, 1, 2, 4],
-                             description="0 = séquentiel ; N = pool de N processus")
-    repeats: int = Field(1, ge=1, le=5)
-    movie_ids: list[int] | None = Field(None, description="films à utiliser (défaut : tous les films indexés)")
-    include_recall: bool = True
-
-
 class HealthOut(BaseModel):
     status: Literal["ok", "degraded"]
     app: str

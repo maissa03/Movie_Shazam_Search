@@ -1,4 +1,4 @@
-import type { BenchRun, Health, ImportResult, Job, Machine, Movie, MovieDetail, Search, Stats } from "./types";
+import type { Health, ImportResult, Job, Movie, MovieDetail, Search, Stats } from "./types";
 
 export const API_URL = (process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000").replace(/\/$/, "");
 
@@ -87,15 +87,10 @@ export const api = {
   jobs: (kind?: string) => request<Job[]>(`/api/jobs${kind ? `?kind=${kind}` : ""}`),
   job: (id: string) => request<Job>(`/api/jobs/${id}`),
   cancelJob: (id: string) => request<Job>(`/api/jobs/${id}/cancel`, { method: "POST" }),
-  benchmarks: () => request<{ runs: BenchRun[]; machine: Machine }>("/api/benchmarks"),
-  runBenchmark: (body: { modes: number[]; repeats: number; include_recall: boolean }) =>
-    request<Job>("/api/benchmarks/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }),
 };
 
 export const mediaUrl = {
   thumbnail: (id: number) => `${API_URL}/api/media/${id}/thumbnail`,
   frame: (id: number, ms: number) => `${API_URL}/api/media/${id}/frame?ms=${Math.max(0, Math.round(ms))}`,
   video: (id: number) => `${API_URL}/api/media/${id}/video`,
-  export: (format: "csv" | "json", runId?: string) =>
-    `${API_URL}/api/benchmarks/export?format=${format}${runId ? `&run_id=${runId}` : ""}`,
 };

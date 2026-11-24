@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 T = TypeVar("T")
 log = logging.getLogger("movieshazam.db.writer")
-_STOP = object()
+_STOP = object()  # sentinelle : déposée dans la file par close() pour terminer run()
 
 
 class WriterClosed(RuntimeError):
@@ -22,20 +22,24 @@ class WriterBusy(RuntimeError):
     pass
 
 
-class DbWriter:
+class DbWriter(threading.Thread):
+    """Thread unique d'écriture SQLite (consommateur).
+
+    Les autres threads (requêtes HTTP, coordinateur d'indexation, recherche) sont les producteurs : ils
+    déposent une fonction d'écriture dans la file avec submit()/run_sync() et attendent son Future.
+    run() exécute chaque écriture dans sa propre transaction, l'une après l'autre.
+    """
+
     def __init__(self, session_factory: sessionmaker[Session], maxsize: int = 1024):
+        super().__init__(name="sqlite-writer", daemon=False)
         self._session_factory = session_factory
         self._queue: queue.Queue[Any] = queue.Queue(maxsize=maxsize)
         self._closed = threading.Event()
-        self._thread = threading.Thread(target=self._run, name="sqlite-writer", daemon=False)
         self.completed = 0
-
-    def start(self) -> None:
-        self._thread.start()
 
     @property
     def alive(self) -> bool:
-        return self._thread.is_alive()
+        return self.is_alive()
 
     def submit(self, fn: Callable[[Session], T], *, block: bool = False, timeout: float = 30.0) -> Future[T]:
         if self._closed.is_set():
@@ -53,7 +57,7 @@ class DbWriter:
     def run_sync(self, fn: Callable[[Session], T], timeout: float | None = 120.0) -> T:
         return self.submit(fn, block=True).result(timeout=timeout)
 
-    def _run(self) -> None:
+    def run(self) -> None:
         while True:
             item = self._queue.get()
             try:
@@ -77,6 +81,6 @@ class DbWriter:
         if self._closed.is_set():
             return
         self._closed.set()
-        if self._thread.is_alive():
+        if self.is_alive():
             self._queue.put(_STOP)
-            self._thread.join(timeout)
+            self.join(timeout)

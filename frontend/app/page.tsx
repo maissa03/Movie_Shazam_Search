@@ -53,7 +53,7 @@ export default function Dashboard() {
               <li key={j.id} className="animate-fade-in">
                 <div className="mb-1 flex items-center justify-between gap-3 text-sm">
                   <span className="truncate text-slate-200">
-                    {j.kind === "index" ? "Indexation" : j.kind === "search" ? "Recherche" : "Benchmark"} · {j.label}
+                    {j.kind === "index" ? "Indexation" : "Recherche"} · {j.label}
                   </span>
                   <StatusBadge status={j.state} />
                 </div>

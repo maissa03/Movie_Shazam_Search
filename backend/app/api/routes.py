@@ -1,15 +1,3 @@
-"""Routes REST locales (FastAPI), toutes **synchrones** (``def``), sans asyncio ni coroutine.
-
-FastAPI exécute chaque fonction ``def`` dans un **thread** de son pool de travail : une requête
-lente (copie d'un upload, attente d'une écriture) n'empêche jamais les autres d'être servies.
-
-* lectures SQLite courtes -> ``ctx.read`` (session dédiée au thread de la requête) ;
-* écritures -> ``ctx.writer`` (thread écrivain unique) ;
-* fichiers / ffprobe / vignettes -> ``ctx.io.call`` (pool de threads E/S borné à ``IO_THREADS``) ;
-* indexation et recherche -> ``JobManager`` (threads d'arrière-plan) : réponse immédiate
-  ``202 Accepted`` + identifiant de job, la progression se consulte par *polling* ``GET /api/jobs/{id}``.
-"""
-
 from __future__ import annotations
 
 import csv
@@ -53,15 +41,6 @@ router = APIRouter(prefix="/api")
 
 
 def register_upload_routes(app: FastAPI, movie_limit: int, clip_limit: int) -> None:
-    """Enregistre les deux routes de téléversement **sur l'application** (pas dans ``router``),
-    chacune avec sa propre limite de taille.
-
-    ``RequestBodyLimitMiddleware`` (Starlette) répond 413 dès que l'en-tête ``Content-Length``
-    dépasse la limite — avant de lire le corps — et compte aussi les octets réellement reçus.
-    Une limite propre à une route n'est appliquée par FastAPI que pour une route ajoutée
-    directement à l'application (les routes d'un routeur inclus ignorent ce réglage) ; ces routes
-    sont donc créées pour chaque application, sans modifier d'état partagé entre applications.
-    """
     specs = (
         ("/api/movies", import_movie, ImportOut, "Importer une vidéo et l'indexer", movie_limit),
         ("/api/search", start_search, SearchStartOut, "Identifier un extrait vidéo", clip_limit),
@@ -73,18 +52,17 @@ def register_upload_routes(app: FastAPI, movie_limit: int, clip_limit: int) -> N
         route.app = RequestBodyLimitMiddleware(route.app, max_body_size=limit)
 
 
-def _ctx(request: Request):  # noqa: ANN202
+def _ctx(request: Request):  
     return request.app.state.ctx
 
 
-def _job_out(ctx, job_id: str | None) -> JobOut | None:  # noqa: ANN001
+def _job_out(ctx, job_id: str | None) -> JobOut | None:  
     if not job_id:
         return None
-    snap = ctx.jobs.snapshot(job_id)  # copie prise sous le verrou du gestionnaire de jobs
+    snap = ctx.jobs.snapshot(job_id)
     return JobOut(**snap) if snap else None
 
 
-# ----------------------------------------------------------------------- santé
 @router.get("/health", response_model=HealthOut, summary="État du backend, de SQLite et de FFmpeg")
 def health(request: Request) -> HealthOut:
     ctx = _ctx(request)
@@ -136,7 +114,6 @@ def stats(request: Request) -> dict:
     return data
 
 
-# ----------------------------------------------------------------------- films
 @router.get("/movies", response_model=list[MovieOut], summary="Liste des films (recherche, tri, filtre)")
 def list_movies(request: Request, q: str | None = None,
                       sort: Literal["created_at", "title", "year", "duration", "size", "status"] = "created_at",
@@ -146,7 +123,6 @@ def list_movies(request: Request, q: str | None = None,
     return [MovieOut.from_model(m, ctx.jobs.active_job_id(m.id)) for m in movies]
 
 
-# POST /api/movies : enregistrée par register_upload_routes (limite de taille propre)
 def import_movie(request: Request, response: Response,
                        file: Annotated[UploadFile, File(description="fichier vidéo")],
                        title: Annotated[str | None, Form()] = None,
@@ -179,11 +155,11 @@ def import_movie(request: Request, response: Response,
             name = ctx.io.call(library.make_thumbnail, movie, s)
             movie = ctx.writer.run_sync(lambda ss: repo.update_movie(ss, movie.id, thumbnail_name=name))
         except FFmpegError:
-            pass  # pas de vignette : l'interface affiche un visuel neutre
+            pass
     job = None
     if movie.status == "indexed" and movie.index_version == s.index_version:
         message = "Ce fichier est déjà dans la bibliothèque et indexé : aucun recalcul."
-        response.status_code = 200  # aucun job créé
+        response.status_code = 200
     else:
         try:
             job_state, _ = ctx.jobs.submit_index(movie.id, movie.title)
@@ -231,13 +207,13 @@ def delete_movie(request: Request, movie_id: int) -> DeleteOut:
     ctx = _ctx(request)
     movie = _get_movie_or_404(ctx, movie_id)
     job_id = ctx.jobs.active_job_id(movie_id)
-    if job_id is not None:  # annulation coopérative puis attente de la fin du job (threading.Event)
+    if job_id is not None:
         ctx.jobs.cancel(job_id)
         snap = ctx.jobs.wait_until_terminal(job_id, timeout=120)
         if snap and snap["state"] not in ("completed", "failed", "cancelled"):
             raise HTTPException(409, "indexation encore en cours d'arrêt, réessayez dans quelques secondes")
     stored = movie.stored_name
-    ctx.writer.run_sync(lambda s: repo.delete_movie(s, movie_id))  # cascade : segments, empreintes, bandes
+    ctx.writer.run_sync(lambda s: repo.delete_movie(s, movie_id))
     removed = ctx.io.call(library.delete_movie_files, movie_id, stored, ctx.settings)
     return DeleteOut(deleted=True, movie_id=movie_id, files_removed=removed)
 
@@ -249,7 +225,7 @@ def reindex_movie(request: Request, response: Response, movie_id: int, force: bo
     s = ctx.settings
     movie = _get_movie_or_404(ctx, movie_id)
     if not force and movie.status == "indexed" and movie.index_version == s.index_version:
-        response.status_code = 200  # rien à faire : pas de job
+        response.status_code = 200
         return ReindexOut(movie=MovieOut.from_model(movie), job=None,
                           message="Index déjà à jour (même fichier, même version d'algorithme) : rien à recalculer.")
     try:
@@ -260,8 +236,6 @@ def reindex_movie(request: Request, response: Response, movie_id: int, force: bo
                       message="Indexation lancée." if created else "Une indexation de ce film est déjà en cours.")
 
 
-# ----------------------------------------------------------------------- recherche
-# POST /api/search : enregistrée par register_upload_routes (limite de taille propre)
 def start_search(request: Request, file: Annotated[UploadFile, File(description="clip de 5 à 30 s")],
                        method: Annotated[Literal["bands", "exhaustive"], Form()] = "bands") -> SearchStartOut:
     ctx = _ctx(request)
@@ -312,13 +286,12 @@ def list_searches(request: Request, limit: int = Query(20, ge=1, le=200)) -> lis
     return [_search_out(ctx, r) for r in rows]
 
 
-# ----------------------------------------------------------------------- jobs
 @router.get("/jobs", response_model=list[JobOut], summary="Jobs locaux (actifs + historique)")
 def list_jobs(request: Request, kind: str | None = None, limit: int = Query(100, ge=1, le=500)) -> list[JobOut]:
     ctx = _ctx(request)
     rows = ctx.read(lambda s: repo.list_jobs(s, limit, kind))
     out: dict[str, dict] = {r.id: job_row_to_dict(r) for r in rows}
-    for snap in ctx.jobs.snapshots():  # l'état en mémoire est le plus frais pour les jobs actifs
+    for snap in ctx.jobs.snapshots():
         if (kind is None or snap["kind"] == kind) and (snap["id"] in out or snap["state"] in ("queued", "running")):
             out[snap["id"]] = snap
     ordered = sorted(out.values(), key=lambda j: j["created_at"], reverse=True)[:limit]
@@ -346,7 +319,6 @@ def cancel_job(request: Request, job_id: str) -> JobOut:
     return JobOut(**snap)
 
 
-# ----------------------------------------------------------------------- benchmarks
 @router.get("/benchmarks", summary="Résultats de benchmarks enregistrés (vraies mesures)")
 def list_benchmarks(request: Request) -> dict:
     ctx = _ctx(request)
@@ -425,7 +397,6 @@ def export_benchmarks(request: Request, format: Literal["csv", "json"] = "json",
                     headers={"Content-Disposition": "attachment; filename=benchmarks.csv"})
 
 
-# ----------------------------------------------------------------------- médias
 @router.get("/media/{movie_id}/thumbnail", summary="Vignette d'un film géré")
 def thumbnail(request: Request, movie_id: int) -> FileResponse:
     ctx = _ctx(request)

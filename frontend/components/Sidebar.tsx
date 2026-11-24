@@ -3,8 +3,6 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Activity, Clapperboard, Gauge, LayoutDashboard, Library, ScanSearch } from "lucide-react";
-import { api } from "@/lib/api";
-import { usePolling } from "@/lib/usePolling";
 
 const NAV = [
   { href: "/", label: "Tableau de bord", icon: LayoutDashboard },
@@ -16,8 +14,6 @@ const NAV = [
 
 export function Sidebar() {
   const path = usePathname();
-  const { data: health, error } = usePolling(api.health, 10_000);
-  const ok = health?.status === "ok" && !error;
 
   return (
     <aside className="border-b border-ink-800 bg-ink-900/70 backdrop-blur md:sticky md:top-0 md:h-screen md:w-64 md:shrink-0 md:border-b-0 md:border-r">
@@ -50,25 +46,6 @@ export function Sidebar() {
             );
           })}
         </nav>
-
-        <div className="mt-auto hidden rounded-xl border border-ink-700/70 bg-ink-850 p-3 text-xs md:block">
-          <div className="flex items-center gap-2 font-medium text-slate-200">
-            <span className={`size-2 rounded-full ${ok ? "bg-emerald-400 shadow-[0_0_8px] shadow-emerald-400/60" : "bg-rose-400"}`} />
-            {ok ? "Moteur local opérationnel" : health ? "Moteur dégradé" : "Backend injoignable"}
-          </div>
-          {health && (
-            <ul className="mt-2 space-y-1 text-slate-400">
-              <li>
-                {health.concurrency.process_workers} processus CPU · {health.concurrency.io_threads} threads E/S
-              </li>
-              <li className="truncate" title={health.concurrency.worker_pids.join(", ")}>
-                PID : {health.concurrency.worker_pids.join(", ")}
-              </li>
-              <li>Index {health.index_version}</li>
-            </ul>
-          )}
-          <p className="mt-2 text-[11px] leading-snug text-slate-500">Tout s’exécute sur ce PC (127.0.0.1). Aucun service distant.</p>
-        </div>
       </div>
     </aside>
   );

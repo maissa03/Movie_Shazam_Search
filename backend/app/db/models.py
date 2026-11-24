@@ -1,17 +1,3 @@
-"""Schéma SQLite (SQLAlchemy 2.x).  Initialisation : ``Base.metadata.create_all`` (voir ``session.init_db``).
-
-Choix notables :
-  * ``movies.stored_name`` : nom **relatif** au dossier des médias, jamais un chemin absolu
-    (le navigateur ne voit jamais un chemin du PC, et rien ne pointe hors du stockage) ;
-  * ``fingerprints.hash_blob`` : 8 octets big-endian (un INTEGER SQLite est signé 64 bits
-    et ne peut pas représenter les empreintes >= 2^63) ;
-  * ``UNIQUE(movie_id, timestamp_ms, algorithm_version)`` : impossible d'insérer deux fois
-    la même empreinte, ni de mélanger deux versions au même instant ;
-  * ``fingerprint_bands`` en ``WITHOUT ROWID`` avec clé primaire
-    ``(band_index, band_value, fingerprint_id)`` : la table **est** l'index
-    ``(band_index, band_value)`` demandé (B-tree compact, recherche par préfixe).
-"""
-
 from __future__ import annotations
 
 from datetime import UTC, datetime
@@ -77,7 +63,7 @@ class Segment(Base):
     segment_index: Mapped[int] = mapped_column(Integer)
     start_ms: Mapped[int] = mapped_column(Integer)
     end_ms: Mapped[int] = mapped_column(Integer)
-    status: Mapped[str] = mapped_column(String(20), default="pending")  # pending | done | failed
+    status: Mapped[str] = mapped_column(String(20), default="pending")
     fingerprints_count: Mapped[int] = mapped_column(Integer, default=0)
     frames_decoded: Mapped[int] = mapped_column(Integer, default=0)
     processing_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -112,17 +98,17 @@ class FingerprintBand(Base):
     )
 
 
-Index("ix_fingerprint_bands_fp", FingerprintBand.fingerprint_id)  # suppression en cascade rapide
+Index("ix_fingerprint_bands_fp", FingerprintBand.fingerprint_id)
 
 
 class Job(Base):
     __tablename__ = "jobs"
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
-    kind: Mapped[str] = mapped_column(String(20))  # index | search | benchmark
+    kind: Mapped[str] = mapped_column(String(20))
     movie_id: Mapped[int | None] = mapped_column(ForeignKey("movies.id", ondelete="SET NULL"), nullable=True)
     label: Mapped[str] = mapped_column(String(300), default="")
-    state: Mapped[str] = mapped_column(String(20), index=True)  # queued | running | completed | failed | cancelled
+    state: Mapped[str] = mapped_column(String(20), index=True)
     stage: Mapped[str | None] = mapped_column(String(120), nullable=True)
     completed_units: Mapped[int] = mapped_column(Integer, default=0)
     total_units: Mapped[int] = mapped_column(Integer, default=0)
@@ -142,7 +128,7 @@ class Search(Base):
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
     job_id: Mapped[str] = mapped_column(String(32))
-    status: Mapped[str] = mapped_column(String(20))  # running | match | ambiguous | no_match | insufficient | failed
+    status: Mapped[str] = mapped_column(String(20))
     clip_name: Mapped[str] = mapped_column(String(300))
     method: Mapped[str] = mapped_column(String(20), default="bands")
     query_duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -160,8 +146,8 @@ class Benchmark(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     run_id: Mapped[str] = mapped_column(String(32), index=True)
-    kind: Mapped[str] = mapped_column(String(20), default="index")  # index | search
-    mode: Mapped[str] = mapped_column(String(30))  # sequential | parallel | bands | exhaustive
+    kind: Mapped[str] = mapped_column(String(20), default="index")
+    mode: Mapped[str] = mapped_column(String(30))
     process_count: Mapped[int] = mapped_column(Integer)
     dataset_id: Mapped[str] = mapped_column(String(64))
     elapsed_ms: Mapped[float] = mapped_column(Float)

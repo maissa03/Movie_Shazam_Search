@@ -1,5 +1,3 @@
-"""Recherche d'un extrait : empreintes du clip -> candidats -> alignement -> résultat lisible."""
-
 from __future__ import annotations
 
 import time
@@ -18,7 +16,7 @@ from app.video.segmentation import format_hms, frame_interval_ms
 
 
 class QueryRejected(ValueError):
-    """Clip refusé (durée hors fenêtre, etc.) : message destiné à l'utilisateur."""
+    pass
 
 
 @dataclass
@@ -44,7 +42,6 @@ def validate_clip(path: Path, settings: Settings) -> VideoInfo:
 
 
 def fingerprint_clip(path: Path, settings: Settings, info: VideoInfo | None = None) -> ClipFingerprints:
-    """Mêmes pHash que l'index ; échantillonnage plus fin (voir ``matching.py``)."""
     info = info or validate_clip(path, settings)
     fps = query_fps(settings)
     res = analyze_segment(SegmentTask(str(path), 0, 0, info.duration_ms, fps, ffmpeg_threads=2,
@@ -58,7 +55,6 @@ def fingerprint_clip(path: Path, settings: Settings, info: VideoInfo | None = No
 
 def search_clip(session_factory: sessionmaker[Session], clip: ClipFingerprints, settings: Settings,
                 params: MatchParams, method: str = "bands") -> tuple[Decision, CandidateStats, float]:
-    """Récupère les candidats (lecture SQLite) puis aligne.  Bloquant : à lancer dans un thread."""
     with session_factory() as s:
         cands, stats = find_candidates(s, clip.frames, params, settings.index_version, method)
     t0 = time.perf_counter()

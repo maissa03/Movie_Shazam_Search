@@ -1,21 +1,3 @@
-"""E/S bloquantes locales : ``ThreadPoolExecutor`` borné + utilitaires fichiers.
-
-Pourquoi des **threads** ici ?
-  Copier un upload, calculer un SHA-256 en flux, lancer ffprobe ou générer une vignette
-  sont des opérations qui passent l'essentiel de leur temps à **attendre** le disque ou un
-  sous-processus.  Pendant ces attentes, CPython relâche le GIL : quelques threads suffisent
-  et coûtent bien moins cher que des processus.  On les borne (``IO_THREADS=2``) pour ne pas
-  saturer le disque : même si 40 requêtes HTTP arrivent en même temps (FastAPI exécute chaque
-  requête dans un thread de son propre pool), au plus 2 copies / SHA-256 / vignettes touchent
-  le disque simultanément ; les autres attendent leur tour dans la file de l'exécuteur.
-
-Synchronisation minimale :
-  * le ``ThreadPoolExecutor`` gère sa propre file thread-safe : aucun verrou ajouté ;
-  * ``KeyedLocks`` : un vrai état partagé entre threads (le dictionnaire des verrous par
-    clé) protégé par un ``threading.Lock`` ; il évite que deux requêtes simultanées génèrent
-    la même vignette en même temps (sinon : deux FFmpeg écrivent le même fichier).
-"""
-
 from __future__ import annotations
 
 import hashlib
@@ -28,7 +10,7 @@ from pathlib import Path
 from typing import Any, BinaryIO, TypeVar
 
 T = TypeVar("T")
-CHUNK = 1024 * 1024  # 1 Mo : mémoire bornée quelle que soit la taille du fichier
+CHUNK = 1024 * 1024
 
 
 class IOExecutor:
@@ -40,7 +22,6 @@ class IOExecutor:
         return self._executor.submit(fn, *args, **kwargs)
 
     def call(self, fn: Callable[..., T], *args: Any, **kwargs: Any) -> T:
-        """Exécute ``fn`` dans un thread E/S borné et attend son résultat (ou son exception)."""
         return self._executor.submit(fn, *args, **kwargs).result()
 
     def shutdown(self) -> None:
@@ -48,15 +29,14 @@ class IOExecutor:
 
 
 class KeyedLocks:
-    """Un verrou par clé (ex. une vignette), créé à la demande."""
 
     def __init__(self) -> None:
         self._guard = threading.Lock()
-        self._locks: dict[str, list] = {}  # clé -> [lock, nombre d'utilisateurs]
+        self._locks: dict[str, list] = {}
 
     @contextmanager
     def hold(self, key: str):
-        with self._guard:  # section critique courte : seulement la mise à jour du dictionnaire
+        with self._guard:
             entry = self._locks.setdefault(key, [threading.Lock(), 0])
             entry[1] += 1
         try:
@@ -82,10 +62,6 @@ def _human_size(n: int) -> str:
 
 
 def copy_stream_with_hash(src: BinaryIO, dest: Path, max_bytes: int) -> tuple[int, str]:
-    """Copie ``src`` vers ``dest`` par blocs de 1 Mo en calculant le SHA-256 au passage.
-
-    Interrompt (et supprime ``dest``) si la taille dépasse ``max_bytes``.
-    """
     digest = hashlib.sha256()
     size = 0
     try:
@@ -116,10 +92,6 @@ def sha256_file(path: Path) -> str:
 
 
 def safe_child(base: Path, name: str) -> Path:
-    """Résout ``base/name`` et vérifie (chemin canonique) qu'il reste DANS ``base``.
-
-    Protège contre ``../``, les chemins absolus et les liens symboliques sortants.
-    """
     if not name or name in (".", "..") or "/" in name or "\\" in name or ":" in name or "\x00" in name:
         raise ValueError("nom de fichier refusé")
     base_r = base.resolve()

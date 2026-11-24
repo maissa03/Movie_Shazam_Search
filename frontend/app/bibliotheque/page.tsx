@@ -36,7 +36,6 @@ export default function Library() {
     setHasActive(!!movies?.some((m) => m.status === "pending" || m.status === "indexing" || m.active_job_id));
   }, [movies]);
 
-  // Envois séquentiels : un fichier à la fois pour ne pas saturer le disque.
   const onFiles = async (files: File[]) => {
     const items: UploadItem[] = files.map((f) => ({ id: `${f.name}-${f.size}-${Math.random()}`, name: f.name, size: f.size, progress: 0, state: "waiting" }));
     setUploads((u) => [...items, ...u]);

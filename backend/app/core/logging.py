@@ -1,5 +1,3 @@
-"""Journalisation structurée : ``clé=valeur`` (job_id, movie_id, segment, pid...)."""
-
 from __future__ import annotations
 
 import logging

@@ -1,9 +1,3 @@
-"""Configuration centralisée (variables d'environnement / fichier ``backend/.env``).
-
-Les chemins relatifs sont résolus depuis la **racine du projet** (pas depuis le dossier
-courant), pour que ``uvicorn``, ``pytest`` et les scripts utilisent les mêmes données.
-"""
-
 from __future__ import annotations
 
 import os
@@ -22,7 +16,6 @@ PROJECT_ROOT = BACKEND_DIR.parent
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=BACKEND_DIR / ".env", env_file_encoding="utf-8", extra="ignore")
 
-    # --- serveur (local uniquement) ---
     app_host: str = "127.0.0.1"
     app_port: int = 8000
     frontend_port: int = 3000
@@ -30,23 +23,20 @@ class Settings(BaseSettings):
         default_factory=lambda: ["http://localhost:3000", "http://127.0.0.1:3000"]
     )
 
-    # --- stockage local ---
     database_url: str = "sqlite:///./data/movieshazam.db"
     media_root: Path = Path("./data/media")
     temp_root: Path = Path("./data/temp")
 
-    # --- empreintes ---
     fingerprint_version: str = ALGORITHM_NAME
     fingerprint_fps: float = 2.0
-    query_oversampling: int = 5  # le clip est échantillonné 5x plus finement (même pHash)
-    segment_duration_seconds: float = 180.0  # longueur MAXIMALE d'un segment
+    query_oversampling: int = 5
+    segment_duration_seconds: float = 180.0
     min_segment_seconds: float = 10.0
     target_min_segments: int = 8
     segment_overlap_ms: int = 0
-    ffmpeg_threads: int = 1  # threads internes de CHAQUE FFmpeg (évite la sursouscription)
+    ffmpeg_threads: int = 1
     segment_timeout_seconds: float = 900.0
 
-    # --- concurrence locale ---
     process_workers: int = 2
     io_threads: int = 2
     max_active_index_jobs: int = 1
@@ -54,7 +44,6 @@ class Settings(BaseSettings):
     max_queued_jobs: int = 32
     max_inflight_segments_per_worker: int = 2
 
-    # --- limites ---
     min_query_duration_seconds: float = 4.0
     max_query_duration_seconds: float = 30.0
     max_upload_gb: float = 8.0
@@ -74,7 +63,6 @@ class Settings(BaseSettings):
             raise ValueError("MovieShazam écoute uniquement en local (127.0.0.1)")
         return v
 
-    # ------------------------------------------------------------------ chemins
     def _resolve(self, p: Path) -> Path:
         return (p if p.is_absolute() else PROJECT_ROOT / p).resolve()
 
@@ -103,11 +91,6 @@ class Settings(BaseSettings):
 
     @property
     def index_version(self) -> str:
-        """Version effective de l'index : algorithme + paramètres qui changent les empreintes.
-
-        Changer ``FINGERPRINT_FPS`` produit donc une autre version : les anciens index ne
-        sont jamais mélangés avec les nouveaux.
-        """
         fps = f"{self.fingerprint_fps:g}"
         return f"{self.fingerprint_version}@{fps}fps"
 

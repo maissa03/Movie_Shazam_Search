@@ -1,18 +1,3 @@
-"""Recherche de candidats dans SQLite : index par bandes (production) ou exhaustive (référence).
-
-Index par bandes (filtre approximatif, honnête sur ses limites) :
-  chaque pHash 64 bits = 4 bandes de 16 bits.  Pour une image du clip on récupère les
-  empreintes qui partagent **au moins une bande** (valeur exacte, et en *multi-probe*
-  aussi les 16 valeurs à 1 bit près), puis on calcule leur vraie distance de Hamming.
-  * sans multi-probe : rappel garanti pour d <= 3 (principe des tiroirs : 3 bits changés
-    ne peuvent pas toucher les 4 bandes) ;
-  * avec multi-probe 1 bit : rappel garanti pour d <= 7 ; au-delà (8..12) le rappel est
-    seulement probable -> il est **mesuré** contre la recherche exhaustive (benchmarks).
-
-Recherche exhaustive : lit toutes les empreintes indexées par blocs (mémoire bornée) et
-calcule les distances avec NumPy.  Exacte, mais coût proportionnel à la taille de la base.
-"""
-
 from __future__ import annotations
 
 import time
@@ -28,7 +13,7 @@ from app.db.models import Fingerprint, Movie
 from app.video.fingerprint import band_probes, bands, blobs_to_array, hamming_many
 from app.video.matching import CandidateMatch, MatchParams, QueryFrame
 
-_CHUNK = 900  # nombre de paramètres par requête IN (...)
+_CHUNK = 900
 
 
 @dataclass
@@ -55,13 +40,6 @@ def _chunks(seq: list, n: int = _CHUNK):
 
 def band_candidates(s: Session, frames: Sequence[QueryFrame], params: MatchParams,
                     version: str) -> tuple[list[CandidateMatch], CandidateStats]:
-    """Sondes -> table TEMP -> **une seule jointure exécutée par SQLite** -> distances NumPy.
-
-    La table ``TEMP`` est propre à la connexion (base temporaire séparée) : elle n'écrit pas
-    dans le fichier principal et ne concurrence donc pas le thread écrivain.  ``CROSS JOIN``
-    impose l'ordre de jointure à SQLite : on parcourt les sondes, et pour chacune on descend
-    dans le B-tree ``(band_index, band_value)`` de ``fingerprint_bands``.
-    """
     t0 = time.perf_counter()
     stats = CandidateStats("bands")
     usable = [q for q in frames if q.informativeness >= params.min_informativeness]
@@ -100,10 +78,9 @@ def band_candidates(s: Session, frames: Sequence[QueryFrame], params: MatchParam
     query_hash = np.zeros(max(q.index for q in usable) + 1, dtype=np.uint64)
     for q in usable:
         query_hash[q.index] = np.uint64(q.hash)
-    dist = np.bitwise_count(np.bitwise_xor(hashes, query_hash[qi])).astype(np.int16)  # vraies distances
+    dist = np.bitwise_count(np.bitwise_xor(hashes, query_hash[qi])).astype(np.int16)
     keep = dist <= params.max_hamming
     qi, movie, ts_arr, dist = qi[keep], movie[keep], ts_arr[keep], dist[keep]
-    # tri (image du clip, distance, film, instant) puis plafond par image : mêmes règles que l'exhaustif
     order = np.lexsort((ts_arr, movie, dist, qi))
     qi, movie, ts_arr, dist = qi[order], movie[order], ts_arr[order], dist[order]
     if qi.size:
@@ -124,7 +101,7 @@ def exhaustive_candidates(s: Session, frames: Sequence[QueryFrame], params: Matc
     stats = CandidateStats("exhaustive")
     usable = [q for q in frames if q.informativeness >= params.min_informativeness]
     stats.query_frames = len(usable)
-    found: dict[int, list[tuple[int, int, int]]] = defaultdict(list)  # qi -> (dist, movie, ts)
+    found: dict[int, list[tuple[int, int, int]]] = defaultdict(list)
     stmt = (select(Fingerprint.movie_id, Fingerprint.timestamp_ms, Fingerprint.hash_blob)
             .join(Movie, Movie.id == Fingerprint.movie_id)
             .where(Movie.status == "indexed", Fingerprint.algorithm_version == version,

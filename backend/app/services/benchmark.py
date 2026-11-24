@@ -1,20 +1,3 @@
-"""Benchmarks reproductibles : indexation séquentielle vs N processus, et recherche bandes vs exhaustive.
-
-Méthode (voir docs/CONCURRENCY_EXPLAINED.md) :
-  * **même corpus, mêmes tâches** (``SegmentTask``) et **même fonction** ``analyze_segment``
-    pour chaque mode ; seuls changent l'exécuteur et le nombre de processus ;
-  * pool créé et **préchauffé hors chronométrage** (démarrage des processus mesuré à part) ;
-  * fichiers lus une fois avant les mesures : toutes les exécutions sont « à chaud » (cache
-    disque de l'OS).  Une mesure « à froid » fiable exige de vider le cache (droits admin) :
-    nous ne la simulons pas ;
-  * ordre des modes **alterné** à chaque répétition, médiane retenue ;
-  * calcul (décodage + pHash) et écriture SQLite chronométrés **séparément** ; l'écriture se
-    fait dans une base **jetable** : l'index réel n'est jamais modifié ni réutilisé ;
-  * ``speedup(N) = T_séquentiel / T_N`` et ``efficacité(N) = speedup(N) / N`` — rien ne
-    garantit qu'ils soient > 1 ;
-  * les empreintes de chaque mode sont comparées à celles du séquentiel (``identical``).
-"""
-
 from __future__ import annotations
 
 import hashlib
@@ -28,13 +11,12 @@ import threading
 import time
 import uuid
 from collections.abc import Callable
-from concurrent.futures import as_completed
 from dataclasses import dataclass
 from pathlib import Path
 
 import psutil
 
-from app.concurrency.process_pool import LocalProcessPool
+from app.concurrency.process_pool import LocalProcessPool, wait_ready
 from app.core.settings import Settings
 from app.db import repo
 from app.db.search_repo import band_candidates, exhaustive_candidates
@@ -57,7 +39,6 @@ class CorpusItem:
     content_hash: str = ""
 
 
-# --------------------------------------------------------------------------- machine
 def cpu_name() -> str:
     if sys.platform == "win32":
         try:
@@ -89,11 +70,6 @@ def machine_info(settings: Settings) -> dict:
 
 
 class ResourceSampler(threading.Thread):
-    """Thread auxiliaire : échantillonne la RAM (processus + descendants) et le CPU.
-
-    ``threading.Event`` sert à l'arrêter proprement ; ``threading.Lock`` protège les
-    mesures, lues par le thread principal pendant que le sampler les met à jour.
-    """
 
     def __init__(self, interval: float = 0.2):
         super().__init__(name="resource-sampler", daemon=True)
@@ -156,7 +132,6 @@ def _warm_cache(items: list[CorpusItem]) -> None:
 
 def _write_scratch(results: list[tuple[int, SegmentResult]], items: list[CorpusItem], settings: Settings,
                    scratch: Path) -> float:
-    """Écrit les résultats dans une base SQLite jetable (même code d'écriture que l'application)."""
     scratch.unlink(missing_ok=True)
     engine = make_engine(scratch)
     init_db(engine)
@@ -195,13 +170,12 @@ def _write_scratch(results: list[tuple[int, SegmentResult]], items: list[CorpusI
 
 def run_index_benchmark(items: list[CorpusItem], settings: Settings, modes: list[int], repeats: int = 1,
                         publish: Publish | None = None, scratch_dir: Path | None = None) -> dict:
-    """``modes`` : 0 = séquentiel (boucle dans le processus courant), N>0 = pool de N processus."""
     publish = publish or (lambda _u: None)
     scratch_dir = scratch_dir or settings.temp_dir
     scratch_dir.mkdir(parents=True, exist_ok=True)
     modes = sorted(set(modes), key=lambda m: (m != 0, m))
     if 0 not in modes:
-        modes = [0, *modes]  # le séquentiel est la référence du speedup
+        modes = [0, *modes]
     tasks: list[tuple[int, object]] = []
     for n, it in enumerate(items):
         _, plans = plan_for(it.duration_ms, settings)
@@ -235,9 +209,10 @@ def run_index_benchmark(items: list[CorpusItem], settings: Settings, modes: list
                     for n, task in tasks:
                         results.append((n, analyze_segment(task)))  # type: ignore[arg-type]
                 else:
-                    fut_map = {pool.submit(analyze_segment, task): n for n, task in tasks}
-                    for f in as_completed(fut_map):
-                        results.append((fut_map[f], f.result()))
+                    pending = {pool.apply_async(task): n for n, task in tasks}
+                    while pending:
+                        for work in wait_ready(pending):
+                            results.append((pending.pop(work), work.get()))
                 elapsed = time.perf_counter() - t0
             finally:
                 res_usage = sampler.stop()
@@ -263,7 +238,6 @@ def run_index_benchmark(items: list[CorpusItem], settings: Settings, modes: list
             step += 1
             publish({"completed_units": step})
 
-    # agrégation : médiane par mode
     summary = []
     seq_ms = statistics.median(x["elapsed_ms"] for x in runs if x["mode"] == "sequential")
     for mode in modes:
@@ -291,16 +265,9 @@ def run_index_benchmark(items: list[CorpusItem], settings: Settings, modes: list
             "corpus_duration_ms": sum(it.duration_ms for it in items)}
 
 
-# --------------------------------------------------------------------------- recherche
 def run_band_recall_benchmark(session_factory, settings: Settings, params: MatchParams,  # noqa: ANN001
                               samples: int = 150, distances: tuple[int, ...] = (0, 2, 4, 6, 8, 10, 12),
                               seed: int = 2026) -> dict:
-    """Rappel du filtre par bandes sur des variations **contrôlées** (bits inversés au hasard).
-
-    Pour chaque distance d, on prend des empreintes réelles de la base, on inverse d bits
-    choisis au hasard, puis on vérifie si l'index par bandes retrouve l'empreinte d'origine
-    (l'exhaustive la retrouve toujours, par construction).
-    """
     rng = random.Random(seed)
     with session_factory() as s:
         from sqlalchemy import select

@@ -1,6 +1,5 @@
 @import "tailwindcss";
 
-/* Thème sombre MovieShazam : tons ardoise + accent ambre « salle de cinéma ». */
 @theme {
   --font-sans: "Segoe UI Variable", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
   --font-mono: "Cascadia Code", "Consolas", ui-monospace, monospace;
@@ -33,7 +32,6 @@ body {
   background: rgb(245 181 68 / 0.35);
 }
 
-/* Classes de composants (Tailwind v4 : @utility pour pouvoir les combiner avec @apply). */
 @utility card {
   @apply rounded-2xl border border-ink-700/70 bg-ink-900/80 shadow-[0_1px_0_0_rgb(255_255_255/0.03)_inset];
 }

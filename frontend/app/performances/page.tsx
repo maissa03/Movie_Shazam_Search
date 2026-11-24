@@ -24,8 +24,6 @@ export default function PerformancePage() {
   const cpus = data?.machine.logical_cpus ?? 4;
   const runs = data?.runs ?? [];
   const run: BenchRun | undefined = runs.find((r) => r.run_id === selected) ?? runs.find((r) => r.index.length > 0);
-  // Les mesures de recherche (rappel, passage à l'échelle) sont rattachées à une seule exécution :
-  // on affiche celles de l'exécution choisie, sinon les plus récentes disponibles.
   const recallRun = run?.recall?.available ? run : runs.find((r) => r.recall?.available);
 
   useEffect(() => {
@@ -180,7 +178,7 @@ export default function PerformancePage() {
       {!run && data && (
         <div className="mt-6">
           <EmptyState icon={<Gauge className="size-5" />} title="Aucun benchmark enregistré">
-            Indexez au moins un film puis lancez un benchmark ici, ou exécutez <code className="text-slate-300">python scripts/run_benchmark.py</code>.
+            Indexez au moins un film puis lancez un benchmark ici.
           </EmptyState>
         </div>
       )}
@@ -299,8 +297,7 @@ export default function PerformancePage() {
                   <p>
                     {recallRun.recall.samples} empreintes réelles testées sur un index de {num(recallRun.recall.index_size)} empreintes. Recherche exhaustive des mêmes requêtes : {duration(recallRun.recall.exhaustive_ms_same_queries)}.
                   </p>
-                  <p className="mt-2">La comparaison de passage à l’échelle (index de plusieurs centaines de milliers d’empreintes) est produite par <code className="text-slate-300">scripts/run_benchmark.py</code>.</p>
-                </div>
+                        </div>
               )}
             </div>
           )}

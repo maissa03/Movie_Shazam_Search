@@ -1,17 +1,3 @@
-"""Accès sûr à FFmpeg / ffprobe.
-
-Règles appliquées partout dans ce module :
-  * ``subprocess`` avec une **liste d'arguments** (jamais ``shell=True``) : un nom de
-    fichier contenant ``; rm -rf`` reste un simple argument, pas une commande ;
-  * code de sortie vérifié, stderr capturé (dans un fichier temporaire pour ne jamais
-    bloquer le pipe), délai maximal (watchdog) et ``kill()`` systématique en cas
-    d'arrêt anticipé ;
-  * décodage **en flux** : FFmpeg réduit chaque image en 64x64 niveaux de gris
-    (4 096 octets) et nous les lisons une par une — jamais un film entier en RAM ;
-  * ``-threads 1`` par défaut : quand N processus du pool décodent en parallèle,
-    on évite que chaque FFmpeg lance lui-même 12 threads (sursouscription CPU).
-"""
-
 from __future__ import annotations
 
 import json
@@ -27,12 +13,12 @@ from pathlib import Path
 
 import numpy as np
 
-FRAME_SIZE = 64  # côté (en pixels) des images grises produites par FFmpeg
-_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)  # évite une console sous Windows
+FRAME_SIZE = 64
+_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 class FFmpegError(RuntimeError):
-    """Erreur d'exécution de FFmpeg/ffprobe (message destiné à l'utilisateur)."""
+    pass
 
 
 class FFmpegNotFound(FFmpegError):
@@ -45,12 +31,6 @@ class InvalidVideo(FFmpegError):
 
 @cache
 def find_binary(name: str) -> str:
-    """Trouve ``ffmpeg`` / ``ffprobe``.
-
-    Ordre : variable d'environnement ``FFMPEG_BINARY`` / ``FFPROBE_BINARY``, puis le
-    ``PATH``, puis (Windows) l'emplacement d'installation de ``winget install Gyan.FFmpeg``
-    — utile tant que le terminal n'a pas été rouvert après l'installation.
-    """
     env = os.environ.get(f"{name.upper()}_BINARY")
     if env:
         if Path(env).is_file():
@@ -69,12 +49,10 @@ def find_binary(name: str) -> str:
     )
 
 
-_VERSION: str | None = None  # mémorisée après le premier succès (la version ne change pas en cours d'exécution)
+_VERSION: str | None = None
 
 
 def ffmpeg_version() -> str:
-    """Première ligne de ``ffmpeg -version``.  Un échec n'est pas mémorisé (FFmpeg peut être
-    installé ensuite) ; deux threads qui la calculent en même temps écrivent la même valeur."""
     global _VERSION
     if _VERSION is not None:
         return _VERSION
@@ -112,10 +90,6 @@ def _parse_rate(rate: str | None) -> float:
 
 
 def probe_video(path: str | Path, timeout_s: float = 30.0) -> VideoInfo:
-    """Valide un fichier avec ffprobe et retourne ses métadonnées.
-
-    Lève ``InvalidVideo`` si le fichier n'est pas lisible ou ne contient aucun flux vidéo.
-    """
     cmd = [find_binary("ffprobe"), "-v", "error", "-print_format", "json",
            "-show_format", "-show_streams", str(path)]
     try:
@@ -160,7 +134,7 @@ def probe_video(path: str | Path, timeout_s: float = 30.0) -> VideoInfo:
 @dataclass
 class DecodeStats:
     frames: int = 0
-    read_s: float = 0.0  # temps passé à attendre FFmpeg (décodage + mise à l'échelle)
+    read_s: float = 0.0
 
 
 def iter_gray_frames(
@@ -175,22 +149,6 @@ def iter_gray_frames(
     stats: DecodeStats | None = None,
     ffmpeg_bin: str | None = None,
 ) -> Iterator[tuple[int, np.ndarray]]:
-    """Décode une portion de vidéo **en flux** et produit ``(index, image)``.
-
-    ``index`` k correspond au temps ``start_ms + k * 1000 / fps`` (horodatage relatif à
-    ``start_ms``) ; ``image`` est un tableau ``uint8`` de forme ``(size, size)``.
-
-    * ``-ss`` placé avant ``-i`` : recherche rapide puis décodage précis jusqu'à l'instant ;
-    * filtre ``fps`` : échantillonnage régulier, y compris pour les vidéos à FPS variable.
-      Réglages vérifiés expérimentalement (vidéo dont chaque image encode son numéro) :
-        - le filtre émet, pour chaque case de sortie, la **dernière** image source qui y tombe ;
-          avec ``round=near`` (défaut) l'image étiquetée ``k/fps`` date en réalité de
-          ``k/fps + 0,5/fps`` (≈ +240 ms à 2 img/s) -> on utilise ``round=up`` : case k =
-          dernière image **à ou avant** ``k/fps`` (erreur < 1 image source) ;
-        - après un ``-ss`` qui ne tombe pas pile sur une image, la numérotation commençait à
-          la case 1 (décalage d'une case entière) -> ``start_time=0`` force la case 0 ;
-    * ``scale=...:flags=area`` : moyenne par zones (anti-crénelage) ; ``format=gray`` : luminance.
-    """
     import time
 
     ffmpeg = ffmpeg_bin or find_binary("ffmpeg")
@@ -214,7 +172,7 @@ def iter_gray_frames(
         timed_out.set()
         proc.kill()
 
-    timer = threading.Timer(timeout_s, _watchdog)  # tue FFmpeg s'il dépasse le délai
+    timer = threading.Timer(timeout_s, _watchdog)
     timer.daemon = True
     timer.start()
     finished_normally = False
@@ -228,7 +186,7 @@ def iter_gray_frames(
                 stats.read_s += time.perf_counter() - t0
             if not buf:
                 break
-            if len(buf) < frame_bytes:  # image tronquée en fin de flux
+            if len(buf) < frame_bytes:
                 break
             if stats is not None:
                 stats.frames += 1
@@ -238,7 +196,7 @@ def iter_gray_frames(
         finished_normally = True
     finally:
         timer.cancel()
-        if proc.poll() is None:  # arrêt anticipé (exception, annulation, consommateur fermé)
+        if proc.poll() is None:
             proc.kill()
             proc.wait()
         if proc.stdout:
@@ -255,7 +213,6 @@ def iter_gray_frames(
 def extract_thumbnail(
     path: str | Path, dest: str | Path, at_ms: int, width: int = 480, timeout_s: float = 60.0
 ) -> None:
-    """Extrait une image JPEG (vignette) à ``at_ms`` ; écriture atomique via fichier temporaire."""
     dest = Path(dest)
     tmp = dest.with_name(dest.stem + ".tmp" + dest.suffix)
     cmd = [find_binary("ffmpeg"), "-hide_banner", "-nostdin", "-loglevel", "error", "-y",

@@ -2,11 +2,6 @@
 
 import { hms } from "@/lib/format";
 
-/**
- * Frise du film : position du passage reconnu dans la durée totale, et images alignées
- * (chaque trait = une image de la grille du film associée à une image du clip ; couleur =
- * distance de Hamming).
- */
 export function Timeline({
   durationMs,
   startMs,

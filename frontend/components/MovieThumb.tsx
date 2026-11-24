@@ -3,7 +3,6 @@
 import { Film } from "lucide-react";
 import { useState } from "react";
 
-/** Image servie par le backend (jamais un chemin du disque) avec repli neutre. */
 export function MovieThumb({ src, alt, className = "" }: { src: string | null; alt: string; className?: string }) {
   const [failed, setFailed] = useState(false);
   if (!src || failed) {

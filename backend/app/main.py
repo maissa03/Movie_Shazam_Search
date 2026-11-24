@@ -1,25 +1,3 @@
-"""Application FastAPI : démarrage, arrêt et configuration — **sans asyncio**.
-
-Le code de l'application est entièrement synchrone :
-  * les routes sont des fonctions ``def`` que FastAPI exécute dans les threads de son pool ;
-  * le démarrage et l'arrêt sont des fonctions ordinaires enregistrées comme gestionnaires
-    ``on_startup`` / ``on_shutdown`` (FastAPI les appelle une fois, au lancement et à l'arrêt) ;
-  * les traitements de fond sont des threads (``JobManager``) et des processus (pool).
-(Uvicorn, le serveur HTTP, utilise en interne sa propre boucle d'événements pour lire les
-sockets ; l'application ne la manipule jamais.)
-
-Démarrage :  SQLite (WAL) -> thread écrivain -> nettoyage des jobs interrompus et des fichiers
-             temporaires -> vérification de la bibliothèque -> pool de processus (préchauffé,
-             PID relevés) -> pool de threads E/S -> gestionnaire de jobs (threads).
-Arrêt :      refus des nouveaux jobs + annulation coopérative -> pool arrêté (segments en cours
-             interrompus, FFmpeg tués) -> derniers threads de jobs -> threads E/S -> écritures
-             vidées puis thread écrivain arrêté -> base fermée.
-
-Lancer **un seul** processus Uvicorn (pas d'option ``--workers``) : plusieurs workers web
-dupliqueraient les pools de processus, la mémoire et l'écrivain SQLite.  Le parallélisme CPU
-vient du pool interne, pas du nombre de réplicas du serveur.
-"""
-
 from __future__ import annotations
 
 import logging
@@ -50,8 +28,8 @@ from app.video.matching import MatchParams
 T = TypeVar("T")
 log = logging.getLogger("movieshazam.app")
 
-DEFAULT_BODY_LIMIT = 10 * 1024**2  # requêtes JSON ordinaires
-MULTIPART_SLACK = 1024**2  # en-têtes multipart autour du fichier envoyé
+DEFAULT_BODY_LIMIT = 10 * 1024**2
+MULTIPART_SLACK = 1024**2
 
 
 @dataclass
@@ -63,10 +41,9 @@ class AppContext:
     pool: LocalProcessPool
     io: IOExecutor
     params: MatchParams
-    jobs: JobManager = None  # type: ignore[assignment]
+    jobs: JobManager = None  
 
     def read(self, fn: Callable[[Session], T]) -> T:
-        """Lecture SQLite courte, dans le thread appelant, avec une session dédiée (jamais partagée)."""
         with self.session_factory() as s:
             return fn(s)
 
@@ -80,8 +57,6 @@ def _clean_temp(settings: Settings) -> int:
 
 
 def startup(settings: Settings) -> AppContext:
-    """Démarre tous les composants, dans l'ordre.  En cas d'échec, arrête ceux déjà lancés
-    (sinon un thread non daemon, comme l'écrivain, empêcherait le processus de se terminer)."""
     setup_logging()
     settings.ensure_dirs()
     try:
@@ -92,6 +67,7 @@ def startup(settings: Settings) -> AppContext:
     engine = make_engine(settings.database_path)
     init_db(engine)
     sf = make_session_factory(engine)
+    ###############thread that writes into the db
     writer = DbWriter(sf)
     writer.start()
     pool: LocalProcessPool | None = None
@@ -123,11 +99,11 @@ def startup(settings: Settings) -> AppContext:
 
 def shutdown(ctx: AppContext) -> None:
     log.info("arrêt en cours...")
-    ctx.jobs.stop()  # refuse, annule, laisse finir les segments engagés (borné)
-    ctx.pool.shutdown()  # Event d'abandon : les segments encore en cours s'interrompent
-    ctx.jobs.join()  # derniers threads de jobs (ils constatent l'annulation)
+    ctx.jobs.stop()
+    ctx.pool.shutdown()
+    ctx.jobs.join()
     ctx.io.shutdown()
-    ctx.writer.close()  # vide la file d'écritures puis arrête le thread écrivain
+    ctx.writer.close()
     ctx.engine.dispose()
     log.info("arrêt terminé")
 
@@ -153,8 +129,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         on_startup=[on_startup],
         on_shutdown=[on_shutdown],
     )
-    # ajoutée en premier = la plus interne ; CORS (ajouté ensuite) reste la plus externe et
-    # ajoute donc ses en-têtes même aux réponses 413
     app.add_middleware(RequestBodyLimitMiddleware, max_body_size=DEFAULT_BODY_LIMIT)
     app.add_middleware(
         CORSMiddleware,
@@ -171,7 +145,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def _closed(_r: Request, exc: WriterClosed) -> JSONResponse:
         return JSONResponse({"detail": str(exc)}, status_code=503)
 
-    # routes de téléversement d'abord (limites propres), puis toutes les autres routes
     register_upload_routes(app, movie_limit=settings.max_upload_bytes + MULTIPART_SLACK,
                            clip_limit=settings.max_clip_bytes + MULTIPART_SLACK)
     app.include_router(router)

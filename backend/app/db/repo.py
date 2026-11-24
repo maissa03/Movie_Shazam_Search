@@ -1,10 +1,3 @@
-"""Opérations SQLite (repositories).  Toutes reçoivent une ``Session`` ouverte.
-
-Les fonctions *d'écriture* sont appelées via ``DbWriter`` (un seul thread écrivain, une
-transaction par appel) ; les fonctions *de lecture* peuvent être appelées depuis n'importe
-quel thread avec sa propre session courte.
-"""
-
 from __future__ import annotations
 
 import json
@@ -19,11 +12,10 @@ from app.video.fingerprint import bands, to_blob
 from app.video.pipeline import SegmentResult
 from app.video.segmentation import SegmentPlan
 
-BAND_MIN_INFORMATIVENESS = 2.0  # images moins informatives : stockées mais pas dans l'index par bandes
+BAND_MIN_INFORMATIVENESS = 2.0
 MOVIE_STATUSES = ("pending", "indexing", "indexed", "failed", "cancelled")
 
 
-# --------------------------------------------------------------------------- films
 def get_movie(s: Session, movie_id: int) -> Movie | None:
     return s.get(Movie, movie_id)
 
@@ -64,8 +56,7 @@ def update_movie(s: Session, movie_id: int, **fields) -> Movie | None:
 
 
 def clear_movie_index(s: Session, movie_id: int) -> None:
-    """Supprime segments + empreintes + bandes du film (toutes versions), en une transaction."""
-    s.execute(delete(Segment).where(Segment.movie_id == movie_id))  # cascade -> fingerprints -> bands
+    s.execute(delete(Segment).where(Segment.movie_id == movie_id))
     s.execute(update(Movie).where(Movie.id == movie_id).values(
         segments_total=0, segments_done=0, fingerprints_count=0, index_version=None, segment_ms=None,
         indexed_at=None))
@@ -79,7 +70,6 @@ def delete_movie(s: Session, movie_id: int) -> Movie | None:
     return movie
 
 
-# ------------------------------------------------------------------ indexation
 @dataclass(frozen=True)
 class SegmentTodo:
     segment_id: int
@@ -90,14 +80,6 @@ class SegmentTodo:
 
 def prepare_index(s: Session, movie_id: int, version: str, segment_ms: int, plans: list[SegmentPlan],
                   force: bool = False) -> list[SegmentTodo] | None:
-    """Prépare une indexation **incrémentale**.
-
-    * Même version d'algorithme + même découpage + fichier inchangé : les segments déjà
-      ``done`` sont conservés, seuls les autres seront calculés (reprise après annulation/échec).
-    * Version ou découpage différent, ou ``force`` : l'ancien index est entièrement supprimé
-      (jamais de mélange de versions incompatibles).
-    Retourne la liste des segments à calculer, ou ``None`` si le film n'existe plus.
-    """
     movie = s.get(Movie, movie_id)
     if movie is None:
         return None
@@ -131,14 +113,10 @@ def prepare_index(s: Session, movie_id: int, version: str, segment_ms: int, plan
 
 def save_segment_result(s: Session, movie_id: int, segment_id: int, version: str, result: SegmentResult,
                         job_id: str | None = None) -> bool:
-    """Insère les empreintes d'un segment par lot (idempotent) et met à jour la progression.
-
-    Retourne ``False`` si le film/segment a disparu entre-temps (suppression pendant l'indexation).
-    """
     seg = s.get(Segment, segment_id)
     if seg is None or seg.movie_id != movie_id or seg.index_version != version:
         return False
-    s.execute(delete(Fingerprint).where(Fingerprint.segment_id == segment_id))  # ré-exécution sûre
+    s.execute(delete(Fingerprint).where(Fingerprint.segment_id == segment_id))
     rows = [{"movie_id": movie_id, "segment_id": segment_id, "timestamp_ms": ts, "hash_blob": to_blob(h),
              "informativeness": inf, "algorithm_version": version}
             for ts, h, inf in zip(result.timestamps, result.hashes, result.informativeness)]
@@ -182,7 +160,6 @@ def mark_segment_failed(s: Session, segment_id: int, error: str) -> None:
 
 
 def finalize_index(s: Session, movie_id: int, version: str) -> tuple[bool, str]:
-    """Passe le film à ``indexed`` **seulement** si tous les segments sont terminés et cohérents."""
     movie = s.get(Movie, movie_id)
     if movie is None:
         return False, "film supprimé"
@@ -215,7 +192,6 @@ def movie_fingerprints(s: Session, movie_id: int, version: str) -> list[tuple[in
         .order_by(Fingerprint.timestamp_ms))]
 
 
-# ------------------------------------------------------------------------ jobs
 def upsert_job(s: Session, job_id: str, **fields) -> Job:
     job = s.get(Job, job_id)
     if job is None:
@@ -240,7 +216,6 @@ def list_jobs(s: Session, limit: int = 100, kind: str | None = None) -> list[Job
 
 
 def fail_interrupted_jobs(s: Session) -> int:
-    """Au démarrage : les jobs restés « en cours » après un arrêt brutal sont marqués interrompus."""
     jobs = list(s.scalars(select(Job).where(Job.state.in_(("queued", "running")))))
     for job in jobs:
         job.state = "failed"
@@ -259,7 +234,6 @@ def prune_jobs(s: Session, keep_days: int = 30) -> None:
     s.execute(delete(Job).where(Job.finished_at < utcnow() - timedelta(days=keep_days)))
 
 
-# -------------------------------------------------------------------- recherches
 def save_search(s: Session, **fields) -> Search:
     search = s.get(Search, fields["id"])
     if search is None:
@@ -280,7 +254,6 @@ def list_searches(s: Session, limit: int = 20) -> list[Search]:
     return list(s.scalars(select(Search).order_by(Search.created_at.desc()).limit(limit)))
 
 
-# -------------------------------------------------------------------- benchmarks
 def add_benchmark_rows(s: Session, rows: list[dict]) -> None:
     s.add_all(Benchmark(**r) for r in rows)
 
@@ -289,7 +262,6 @@ def list_benchmarks(s: Session, limit: int = 500) -> list[Benchmark]:
     return list(s.scalars(select(Benchmark).order_by(Benchmark.created_at.desc(), Benchmark.id).limit(limit)))
 
 
-# ------------------------------------------------------------------- statistiques
 def library_stats(s: Session) -> dict:
     total = s.scalar(select(func.count()).select_from(Movie)) or 0
     indexed = s.scalar(select(func.count()).select_from(Movie).where(Movie.status == "indexed")) or 0

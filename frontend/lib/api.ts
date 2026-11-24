@@ -1,4 +1,3 @@
-// Client API typé : uniquement HTTP vers le backend local (127.0.0.1), aucun autre service.
 import type { BenchRun, Health, ImportResult, Job, Machine, Movie, MovieDetail, Search, Stats } from "./types";
 
 export const API_URL = (process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000").replace(/\/$/, "");
@@ -11,7 +10,6 @@ export class ApiError extends Error {
 
 const TOO_LARGE = "Fichier trop volumineux : la limite de taille autorisée par le backend est dépassée.";
 
-/** Message lisible : « detail » JSON du backend, sinon un message français selon le code HTTP. */
 function errorMessage(status: number, body: unknown, fallback: string): string {
   const detail = (body as { detail?: unknown } | null)?.detail;
   if (status === 413) return typeof detail === "string" && detail !== "Content Too Large" ? detail : TOO_LARGE;
@@ -31,14 +29,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     try {
       body = await res.json();
     } catch {
-      /* corps non JSON (ex. 413 « Content Too Large ») */
     }
     throw new ApiError(res.status, errorMessage(res.status, body, res.statusText));
   }
   return (await res.json()) as T;
 }
 
-/** Envoi de fichier avec progression (XMLHttpRequest expose l'avancement de l'upload, pas fetch). */
 function upload<T>(path: string, form: FormData, onProgress?: (fraction: number) => void): Promise<T> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
@@ -51,7 +47,6 @@ function upload<T>(path: string, form: FormData, onProgress?: (fraction: number)
       try {
         body = JSON.parse(xhr.responseText);
       } catch {
-        /* ignoré */
       }
       if (xhr.status >= 200 && xhr.status < 300) resolve(body as T);
       else reject(new ApiError(xhr.status, errorMessage(xhr.status, body, `Erreur HTTP ${xhr.status}`)));

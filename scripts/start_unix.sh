@@ -1,8 +1,4 @@
 #!/usr/bin/env bash
-# Démarre MovieShazam sur CE PC (Linux / macOS) : backend FastAPI 127.0.0.1:8000 + frontend Next.js 127.0.0.1:3000.
-# Première exécution : crée .venv, installe les dépendances exactes et construit le frontend.
-# Un seul processus Uvicorn ; aucune écoute réseau hors 127.0.0.1 ; aucune vidéo supprimée.
-# Usage : bash scripts/start_unix.sh [--dev] [--setup-only]
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

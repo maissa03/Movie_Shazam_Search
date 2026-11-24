@@ -2,10 +2,6 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-/**
- * Polling HTTP simple : appelle `fetcher` toutes les `intervalMs` tant que `active` est vrai.
- * Une seule requête à la fois (enchaînement par setTimeout, pas setInterval), arrêt au démontage.
- */
 export function usePolling<T>(fetcher: () => Promise<T>, intervalMs: number, active = true) {
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<string | null>(null);

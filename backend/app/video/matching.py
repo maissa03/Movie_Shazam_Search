@@ -1,47 +1,3 @@
-"""Recherche de candidats, alignement temporel, score et décision.
-
-Ce module est **indépendant de la base de données** : il reçoit des correspondances
-approximatives ``(image du clip, film, horodatage dans le film, distance)`` et décide si
-l'extrait provient d'un film et à quel instant.
-
-Principe (vote sur le décalage temporel) :
-    si le clip commence à l'instant S du film, alors pour chaque image commune
-    ``t_film - t_clip ≈ S``.  Les vraies correspondances s'accumulent donc sur un même
-    *offset*, alors que les ressemblances fortuites se dispersent sur des offsets aléatoires.
-
-Échantillonnage :
-    * le film est indexé sur une grille régulière (2 images/s -> une image toutes les 500 ms) ;
-    * le clip est échantillonné ``oversampling`` fois plus finement (10 images/s par défaut),
-      avec **exactement le même pHash**.  Comme le clip peut commencer n'importe quand
-      (ex. 42:13.3), une image de la grille du film a toujours une image du clip à moins de
-      50 ms : on compare des images « en phase » au lieu d'images décalées de 250 ms.
-
-Étapes :
- 1. ne garder que les images *informatives* du clip (pas les images quasi uniformes) ;
- 2. voter pour des couples ``(film, offset arrondi à 500 ms)`` ; chaque vote est pondéré
-    par la similarité et divisé par le nombre de positions que l'image du clip retrouve
-    dans ce film (une image générique — logo, noir, générique — vote donc peu) ;
- 3. pour chaque pic de vote (hypothèse de placement), recherche locale de l'offset au pas
-    du clip (100 ms) ; pour chaque image de la grille du film couverte par le clip, on prend
-    la meilleure image du clip compatible avec cet offset (± tolérance) ;
- 4. **vérification de l'ordre temporel** : plus longue sous-suite où le temps du clip croît
-    avec le temps du film (les associations hors ordre sont écartées) ;
- 5. score de similarité (ci-dessous) ;
- 6. décision : correspondance / ambiguïté / aucune correspondance fiable.
-
-Score de similarité d'une hypothèse (``0`` à ``1``, **ce n'est pas une probabilité**) ::
-
-    sim_g   = 1 - d_g / (D_max + 1)          pour chaque image g de la grille alignée (0 sinon)
-    base    = somme(sim_g) / N_attendues      # distance de Hamming + couverture + nb cohérent
-    stab    = 1 / (1 + (écart-type des offsets / tolérance)²)
-    score   = base * stab
-
-``N_attendues`` = images de la grille du film que le clip devrait couvrir et dont l'image
-correspondante du clip est informative.  La marge face au concurrent suivant (autre film,
-ou même film à un autre instant) intervient dans la **décision** : si
-``score_2 >= ratio_ambiguïté * score_1`` le résultat est ambigu au lieu d'inventer un gagnant.
-"""
-
 from __future__ import annotations
 
 import bisect
@@ -74,11 +30,6 @@ class CandidateMatch:
 
 @dataclass
 class MatchParams:
-    """Paramètres de recherche et de décision.
-
-    Les seuils de décision ont été calibrés sur le split *validation*
-    (``scripts/calibrate_thresholds.py``) puis figés avant l'évaluation sur le split *test*.
-    """
 
     max_hamming: int = 12
     min_informativeness: float = 3.0
@@ -90,7 +41,7 @@ class MatchParams:
     hypotheses_per_movie: int = 3
     max_hypotheses: int = 10
     min_informative_frames: int = 4
-    accept_score: float = 0.50  # calibré sur validation : pire négatif 0.146, pire positif 0.830
+    accept_score: float = 0.50
     min_coverage: float = 0.5
     min_span_ratio: float = 0.5
     min_matched_frames: int = 4
@@ -135,7 +86,7 @@ class Hypothesis:
 
 @dataclass
 class Decision:
-    status: str  # match | ambiguous | no_match | insufficient
+    status: str
     reason: str
     best: Hypothesis | None
     candidates: list[Hypothesis]
@@ -155,15 +106,7 @@ class Decision:
         }
 
 
-# --------------------------------------------------------------------------- #
-# Recherche exhaustive en mémoire (référence)                                   #
-# --------------------------------------------------------------------------- #
 class InMemoryIndex:
-    """Index exhaustif en mémoire : compare chaque image du clip à TOUTES les empreintes.
-
-    Coût O(N_clip x N_index) : c'est la **référence d'exactitude** (tests, mesure du rappel
-    de l'index par bandes), pas l'algorithme de production.
-    """
 
     def __init__(self) -> None:
         self._parts: list[tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]] = []
@@ -206,20 +149,12 @@ class InMemoryIndex:
 
 def cap_candidates(qi: int, idx: np.ndarray, movie: np.ndarray, ts: np.ndarray, dist: np.ndarray,
                    cap: int) -> list[CandidateMatch]:
-    """Garde au plus ``cap`` candidats (les plus proches) pour une image du clip."""
     if idx.size > cap:
         idx = idx[np.lexsort((ts[idx], movie[idx], dist[idx]))[:cap]]
     return [CandidateMatch(qi, int(movie[i]), int(ts[i]), int(dist[i])) for i in idx]
 
 
-# --------------------------------------------------------------------------- #
-# Alignement temporel et score                                                 #
-# --------------------------------------------------------------------------- #
 def longest_ordered(pairs: list[AlignedFrame]) -> list[AlignedFrame]:
-    """Plus longue sous-suite où ``query_ts`` ne décroît pas quand ``movie_ts`` croît.
-
-    ``pairs`` doit être trié par ``movie_ts``.  Algorithme O(n log n) (« patience sorting »).
-    """
     if not pairs:
         return []
     tails: list[int] = []
@@ -243,7 +178,6 @@ def longest_ordered(pairs: list[AlignedFrame]) -> list[AlignedFrame]:
 
 
 class _QueryTimeline:
-    """Accès rapide aux images du clip par horodatage (pas régulier ``step_ms``)."""
 
     def __init__(self, frames: Sequence[QueryFrame], step_ms: int, min_info: float):
         ordered = sorted(frames, key=lambda f: f.ts_ms)
@@ -253,7 +187,6 @@ class _QueryTimeline:
         self.span_ms = (self.ts[-1] + step_ms) if self.ts else 0
 
     def nearest_informative(self, t_ms: float) -> bool:
-        """L'image du clip la plus proche de ``t_ms`` est-elle informative ?"""
         if not self.ts or t_ms < -self.step / 2 or t_ms >= self.span_ms:
             return False
         j = min(max(int(round(t_ms / self.step)), 0), len(self.ts) - 1)
@@ -262,13 +195,12 @@ class _QueryTimeline:
 
 def _score_offset(offset: int, cands: dict[int, list[tuple[int, int]]], qt: _QueryTimeline,
                   grid_ms: int, params: MatchParams) -> tuple[float, dict]:
-    """Note l'hypothèse « le clip commence à ``offset`` ms dans ce film »."""
     tol = params.offset_tolerance_ms
     first_g = max(0, math.ceil(offset / grid_ms) * grid_ms)
     pairs: list[AlignedFrame] = []
     expected: list[int] = []
     for g in range(first_g, offset + qt.span_ms, grid_ms):
-        target = g - offset  # instant attendu dans le clip
+        target = g - offset
         if not qt.nearest_informative(target):
             continue
         expected.append(g)
@@ -298,7 +230,6 @@ def _score_offset(offset: int, cands: dict[int, list[tuple[int, int]]], qt: _Que
 
 def _evaluate(movie_id: int, center: int, cands: dict[int, list[tuple[int, int]]], qt: _QueryTimeline,
               query_duration_ms: int, grid_ms: int, votes: float, params: MatchParams) -> Hypothesis | None:
-    """Recherche locale de l'offset autour du pic de vote, puis construction de l'hypothèse."""
     best_score, best_info = -1.0, None
     for delta in range(-params.local_search_ms, params.local_search_ms + 1, qt.step):
         s, info = _score_offset(center + delta, cands, qt, grid_ms, params)
@@ -320,7 +251,6 @@ def _evaluate(movie_id: int, center: int, cands: dict[int, list[tuple[int, int]]
 
 def rank_hypotheses(frames: Sequence[QueryFrame], candidates: Sequence[CandidateMatch], query_duration_ms: int,
                     grid_ms: int, query_step_ms: int, params: MatchParams) -> list[Hypothesis]:
-    """Vote sur les offsets, extrait les pics et note chaque hypothèse (tri décroissant)."""
     qt = _QueryTimeline(frames, query_step_ms, params.min_informativeness)
     informative = {f.index for f in frames if f.informativeness >= params.min_informativeness}
     qts = {f.index: f.ts_ms for f in frames}
@@ -332,7 +262,6 @@ def rank_hypotheses(frames: Sequence[QueryFrame], candidates: Sequence[Candidate
             by_query[c.query_index].append(c)
             by_movie_ts[c.movie_id][c.movie_ts_ms].append((qts[c.query_index], c.distance))
 
-    # 1) vote pondéré : une image qui ressemble à beaucoup d'endroits d'un film vote peu
     bucket = params.offset_bucket_ms
     votes: dict[tuple[int, int], float] = defaultdict(float)
     for qi, cands in by_query.items():
@@ -344,7 +273,6 @@ def rank_hypotheses(frames: Sequence[QueryFrame], candidates: Sequence[Candidate
             b = round((c.movie_ts_ms - qts[qi]) / bucket)
             votes[(c.movie_id, b)] += sim / per_movie[c.movie_id]
 
-    # 2) pics par film (lissage sur 3 cases + suppression des non-maxima)
     by_movie: dict[int, dict[int, float]] = defaultdict(dict)
     for (m, b), v in votes.items():
         by_movie[m][b] = v
@@ -362,14 +290,12 @@ def rank_hypotheses(frames: Sequence[QueryFrame], candidates: Sequence[Candidate
     peaks.sort(key=lambda p: (-p[0], p[1], p[2]))
     peaks = peaks[: params.max_hypotheses]
 
-    # 3) évaluation complète de chaque hypothèse
     hyps = []
     for v, m, b in peaks:
         h = _evaluate(m, b * bucket, by_movie_ts[m], qt, query_duration_ms, grid_ms, v, params)
         if h is not None:
             hyps.append(h)
     hyps.sort(key=lambda h: (-h.score, -h.matched_frames, h.movie_id, h.start_ms))
-    # 4) fusion des pics qui convergent vers le même placement
     unique: list[Hypothesis] = []
     for h in hyps:
         if all(not same_placement(h, u, params) for u in unique):
@@ -382,7 +308,6 @@ def same_placement(a: Hypothesis, b: Hypothesis, params: MatchParams) -> bool:
 
 
 def unmet_criteria(h: Hypothesis, params: MatchParams) -> list[str]:
-    """Critères d'acceptation non satisfaits (liste vide = acceptable)."""
     problems = []
     if h.score < params.accept_score:
         problems.append(f"score {h.score:.2f} < {params.accept_score:.2f}")
@@ -399,7 +324,7 @@ def decide(frames: Sequence[QueryFrame], hypotheses: list[Hypothesis], params: M
            grid_ms: int = 500, query_step_ms: int = 100) -> Decision:
     n_total = len(frames)
     n_inf = sum(1 for f in frames if f.informativeness >= params.min_informativeness)
-    n_inf_grid = int(round(n_inf * query_step_ms / grid_ms))  # équivalent en images de la grille
+    n_inf_grid = int(round(n_inf * query_step_ms / grid_ms))
     top = hypotheses[:3]
     if n_inf_grid < params.min_informative_frames:
         return Decision("insufficient",

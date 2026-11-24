@@ -2,7 +2,7 @@
 
 Toutes les valeurs ci-dessous ont été **mesurées** (aucune n'est estimée ou simulée) le 15/11/2026 sur la
 machine de développement. Fichiers bruts : `benchmark_latest.json`, `benchmark_*.csv`, `eval_*.json`,
-`calibration.json`. Pour les reproduire : `python scripts/evaluate.py …` et `python scripts/run_benchmark.py …`.
+`calibration.json`.
 
 ## Machine de mesure
 

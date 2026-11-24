@@ -1,34 +1,3 @@
-"""Gestionnaire de jobs à base de **threads** : coordonne sans calculer.
-
-Les requêtes HTTP (que FastAPI exécute chacune dans un thread de son pool) créent les jobs et
-rendent la main immédiatement (``202 Accepted`` + identifiant).  Le travail se fait en
-arrière-plan, sans asyncio :
-
-  * **indexation** : ``queue.Queue(maxsize)`` **bornée**, consommée par ``MAX_ACTIVE_INDEX_JOBS``
-    threads non daemon ; chaque job confie ses segments au ``LocalProcessPool`` (calcul CPU dans
-    des processus) avec une fenêtre glissante de ``Future`` attendues par
-    ``concurrent.futures.wait(FIRST_COMPLETED)`` ;
-  * **recherche** : ``ThreadPoolExecutor(MAX_ACTIVE_SEARCH_JOBS)`` — le nombre de threads du
-    pool borne le nombre de recherches simultanées (pas de sémaphore supplémentaire) ;
-  * **benchmark** : un thread dédié, qui exige l'usage exclusif du CPU.
-
-Synchronisation (minimale, chacune pour un besoin réel) :
-  * ``threading.Lock`` (``_lock``) : la table des jobs et l'état de chaque job sont **lus** par les
-    threads des requêtes (polling ``GET /api/jobs/{id}``) et **modifiés** par les threads de
-    traitement.  Toute lecture (instantané ``to_dict``) et toute modification se font sous ce
-    verrou, en section critique courte — jamais pendant une attente (calcul, écriture SQLite) ;
-  * ordre des écritures : l'instantané d'un job et sa mise en file vers l'écrivain SQLite se
-    font **sous le même verrou** ; la file étant FIFO, un état plus ancien ne peut jamais
-    écraser un état plus récent en base ;
-  * ``threading.Condition`` (``_cpu``) : un benchmark attend le prédicat « aucune indexation en
-    cours » ; une indexation attend « aucun benchmark en cours » ;
-  * ``threading.Event`` par job : signalé à la fin du job (attente avant la suppression d'un film) ;
-  * sentinelle ``None`` dans la file : arrêt propre des threads d'indexation.
-
-Annulation **coopérative entre segments** : les segments non démarrés sont annulés
-(``Future.cancel``), ceux déjà engagés se terminent et sont enregistrés (reprise possible).
-"""
-
 from __future__ import annotations
 
 import json
@@ -37,14 +6,15 @@ import queue
 import threading
 import time
 import uuid
-from collections.abc import Callable, Iterator
-from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+from collections.abc import Callable, Generator
+from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from app.concurrency.process_pool import SegmentWork, wait_ready
 from app.db import repo
 from app.db.models import utcnow
 from app.db.search_repo import find_candidates
@@ -52,7 +22,6 @@ from app.services import library, searching
 from app.services.indexing import build_task, plan_for
 from app.video.ffmpeg_io import FFmpegError
 from app.video.matching import identify
-from app.video.pipeline import analyze_segment
 from app.video.segmentation import format_hms, frame_interval_ms
 
 if TYPE_CHECKING:
@@ -71,15 +40,14 @@ class NotAccepting(RuntimeError):
 
 
 class JobCancelled(Exception):
-    """Levée entre deux étapes d'une recherche dont l'annulation a été demandée."""
+    pass
 
 
 @dataclass
 class JobState:
-    """État d'un job en mémoire.  À lire et modifier **uniquement** sous ``JobManager._lock``."""
 
     id: str
-    kind: str  # index | search | benchmark
+    kind: str
     label: str
     movie_id: int | None = None
     state: str = "queued"
@@ -97,7 +65,7 @@ class JobState:
     force: bool = False
     search_id: str | None = None
     details: dict[str, Any] = field(default_factory=dict)
-    done: threading.Event = field(default_factory=threading.Event, repr=False)  # signalé à la fin du job
+    done: threading.Event = field(default_factory=threading.Event, repr=False)
 
     @property
     def progress(self) -> float:
@@ -122,7 +90,6 @@ class JobState:
 
 
 def job_row_to_dict(row) -> dict:  # noqa: ANN001
-    """Job historique (lu en base) au même format que ``JobState.to_dict``."""
     pids = json.loads(row.worker_pids or "[]")
     elapsed = None
     if row.started_at:
@@ -149,7 +116,7 @@ class JobManager:
         self.ctx = ctx
         self._lock = threading.Lock()
         self._jobs: dict[str, JobState] = {}
-        self._movie_jobs: dict[int, str] = {}  # film -> job actif (déduplication)
+        self._movie_jobs: dict[int, str] = {}
         self._accepting = False
         self._index_queue: queue.Queue[str | None] = queue.Queue(maxsize=s.max_queued_jobs)
         self._index_threads: list[threading.Thread] = []
@@ -160,29 +127,29 @@ class JobManager:
         self._exclusive_active = False
         self._stopping = False
 
-    # ------------------------------------------------------------ cycle de vie
     def start(self) -> None:
         s = self.ctx.settings
         self._search_pool = ThreadPoolExecutor(max_workers=s.max_active_search_jobs, thread_name_prefix="search")
-        self._index_threads = [threading.Thread(target=self._index_worker, name=f"index-worker-{i}", daemon=False)
-                               for i in range(s.max_active_index_jobs)]
+        self._index_threads = [
+            threading.Thread(target=self._index_worker, daemon=False,
+                             name="index-coordinator" if i == 0 else f"index-coordinator-{i}")
+            for i in range(s.max_active_index_jobs)
+        ]
         for t in self._index_threads:
             t.start()
         with self._lock:
             self._accepting = True
 
     def stop(self, timeout: float = 60.0) -> None:
-        """Phase 1 de l'arrêt : refuser les nouveaux jobs, annuler ceux en file, demander
-        l'annulation des autres et laisser finir les segments déjà engagés (au plus ``timeout``)."""
         with self._lock:
             self._accepting = False
             for job in self._jobs.values():
                 if job.state not in TERMINAL:
                     job.cancel_requested = True
-        with self._cpu:  # une indexation qui attend la fin d'un benchmark doit pouvoir s'arrêter
+        with self._cpu:
             self._stopping = True
             self._cpu.notify_all()
-        while True:  # jobs d'indexation encore en file : annulés immédiatement
+        while True:
             try:
                 job_id = self._index_queue.get_nowait()
             except queue.Empty:
@@ -192,7 +159,7 @@ class JobManager:
                 self._cancel_queued(job, "arrêt de l'application")
             self._index_queue.task_done()
         for _ in self._index_threads:
-            self._index_queue.put(None)  # sentinelle : une par thread d'indexation
+            self._index_queue.put(None)
         deadline = time.monotonic() + timeout
         for t in self._index_threads:
             t.join(max(0.0, deadline - time.monotonic()))
@@ -200,13 +167,11 @@ class JobManager:
             self._search_pool.shutdown(wait=True, cancel_futures=True)
         if self._bench_thread is not None:
             self._bench_thread.join(max(0.0, deadline - time.monotonic()))
-        for job in self._live_jobs():  # recherches jamais démarrées (futures annulées par shutdown)
+        for job in self._live_jobs():
             if job.kind == "search":
                 self._search_failed(job, "cancelled", "arrêt de l'application")
 
     def join(self, timeout: float = 30.0) -> None:
-        """Phase 2 (après l'arrêt du pool de processus, qui interrompt les segments en cours) :
-        attendre les threads restants."""
         threads = [*self._index_threads, *([self._bench_thread] if self._bench_thread else [])]
         deadline = time.monotonic() + timeout
         for t in threads:
@@ -220,7 +185,6 @@ class JobManager:
         with self._lock:
             return self._accepting
 
-    # ------------------------------------------------------------ lecture thread-safe
     def _get(self, job_id: str) -> JobState | None:
         with self._lock:
             return self._jobs.get(job_id)
@@ -230,7 +194,6 @@ class JobManager:
             return [j for j in self._jobs.values() if j.state not in TERMINAL]
 
     def snapshot(self, job_id: str) -> dict | None:
-        """Copie cohérente de l'état d'un job (``None`` s'il n'est pas en mémoire)."""
         with self._lock:
             job = self._jobs.get(job_id)
             return job.to_dict() if job else None
@@ -247,7 +210,6 @@ class JobManager:
         with self._lock:
             return job.cancel_requested
 
-    # ------------------------------------------------------------ persistance
     def _row_fields(self, job: JobState) -> dict:  # appelé sous self._lock
         return dict(kind=job.kind, movie_id=job.movie_id, label=job.label[:300], state=job.state, stage=job.stage,
                     completed_units=job.completed_units, total_units=job.total_units,
@@ -261,12 +223,11 @@ class JobManager:
         return self.ctx.writer.submit(lambda s, jid=job.id, f=fields: repo.upsert_job(s, jid, **f))
 
     def _persist(self, job: JobState) -> None:
-        with self._lock:  # instantané + mise en file atomiques : l'ordre FIFO = l'ordre des états
+        with self._lock:
             fut = self._enqueue_row(job)
         fut.result(timeout=120)
 
     def _start(self, job: JobState, stage: str) -> bool:
-        """``queued -> running`` ; ``False`` si le job a été annulé ou clos entre-temps."""
         with self._lock:
             if job.state in TERMINAL or job.cancel_requested:
                 return False
@@ -275,7 +236,6 @@ class JobManager:
         return True
 
     def _finish(self, job: JobState, state: str, error: str | None = None, stage: str | None = None) -> bool:
-        """Passe le job dans un état terminal (une seule fois) ; ``False`` s'il l'était déjà."""
         fut: Future | None = None
         with self._lock:
             if job.state in TERMINAL:
@@ -288,7 +248,7 @@ class JobManager:
                 del self._movie_jobs[job.movie_id]
             try:
                 fut = self._enqueue_row(job)
-            except Exception:  # noqa: BLE001 - la base peut être en fermeture
+            except Exception:  
                 log.exception("persistance du job impossible", extra={"job_id": job.id})
         try:
             if fut is not None:
@@ -306,10 +266,7 @@ class JobManager:
             for j in sorted(finished, key=lambda j: j.finished_at or utcnow())[:-keep]:
                 self._jobs.pop(j.id, None)
 
-    # ------------------------------------------------------------ API publique
     def submit_index(self, movie_id: int, label: str, force: bool = False) -> tuple[dict, bool]:
-        """Met en file une indexation.  Retourne ``(job, créé)`` ; un film déjà en file ou en
-        cours d'indexation n'est **jamais** indexé deux fois en parallèle (déduplication)."""
         with self._lock:
             if not self._accepting:
                 raise NotAccepting("l'application s'arrête : nouveaux jobs refusés")
@@ -324,7 +281,7 @@ class JobManager:
         self._persist(job)
         try:
             self._index_queue.put_nowait(job.id)
-        except queue.Full as exc:  # un autre thread a rempli la file entre-temps
+        except queue.Full as exc:
             self._finish(job, "failed", "file d'attente pleine")
             raise QueueFull("file d'attente pleine, réessayez plus tard") from exc
         log.info("indexation en file", extra={"job_id": job.id, "movie_id": movie_id})
@@ -356,7 +313,7 @@ class JobManager:
                                                             clip_name=clip_name[:300], method=method))
         try:
             self._search_pool.submit(self._run_search, job, clip_path, clip_name, method)
-        except RuntimeError as exc:  # pool déjà arrêté (arrêt de l'application en cours)
+        except RuntimeError as exc:
             self._search_failed(job, "cancelled", "arrêt de l'application")
             raise NotAccepting("l'application s'arrête") from exc
         return self.snapshot(job.id) or {}
@@ -377,16 +334,14 @@ class JobManager:
         return self.snapshot(job_id)
 
     def wait_until_terminal(self, job_id: str, timeout: float = 60.0) -> dict | None:
-        """Attend la fin d'un job (ex. avant de supprimer son film) via son ``threading.Event``."""
         job = self._get(job_id)
         if job is None:
             return None
         job.done.wait(timeout)
         return self.snapshot(job_id)
 
-    # ------------------------------------------------------------ exclusivité CPU
     @contextmanager
-    def _cpu_slot(self, exclusive: bool) -> Iterator[None]:
+    def _cpu_slot(self, exclusive: bool) -> Generator[None, None, None]:
         with self._cpu:
             if exclusive:
                 self._cpu.wait_for(lambda: self._heavy_running == 0 and not self._exclusive_active)
@@ -404,12 +359,11 @@ class JobManager:
                     self._heavy_running -= 1
                 self._cpu.notify_all()
 
-    # ------------------------------------------------------------ indexation
     def _index_worker(self) -> None:
         while True:
             job_id = self._index_queue.get()
             try:
-                if job_id is None:  # sentinelle d'arrêt
+                if job_id is None:
                     return
                 job = self._get(job_id)
                 if job is None:
@@ -431,7 +385,6 @@ class JobManager:
                 self._index_queue.task_done()
 
     def _cancel_queued(self, job: JobState, reason: str | None = None) -> None:
-        """Annule un job d'indexation qui n'a jamais démarré (le film n'est pas modifié s'il est indexé)."""
         if not self._finish(job, "cancelled", reason):
             return
         mid = job.movie_id
@@ -467,7 +420,7 @@ class JobManager:
             self._fail_movie(job, "fichier vidéo introuvable dans le stockage")
             return
         if not self._start(job, "préparation des segments"):
-            self._cancel_queued(job)  # annulé pendant l'attente de l'exclusivité CPU
+            self._cancel_queued(job)
             return
         seg_ms, plans = plan_for(movie.duration_ms, s)
         todo = ctx.writer.run_sync(lambda ss: repo.prepare_index(ss, mid, version, seg_ms, plans, job.force))
@@ -483,27 +436,26 @@ class JobManager:
                                 "process_workers": ctx.pool.workers, "index_version": version})
             job.stage = f"empreintes : {len(todo)} segment(s) à calculer sur {ctx.pool.workers} processus"
         self._persist(job)
-        log.info("indexation démarrée", extra={"job_id": job.id, "movie_id": mid})
+        log.info("indexation démarrée (%s)", threading.current_thread().name,
+                 extra={"job_id": job.id, "movie_id": mid})
 
         backlog = [(t, build_task(path, t, s, mid, job.id)) for t in todo]
-        window = ctx.pool.workers * s.max_inflight_segments_per_worker  # segments en vol, bornés
-        pending: dict[Future, repo.SegmentTodo] = {}
+        window = ctx.pool.workers * s.max_inflight_segments_per_worker
+        pending: dict[SegmentWork, repo.SegmentTodo] = {}
         error: str | None = None
         t0 = time.perf_counter()
         while backlog or pending:
             while backlog and len(pending) < window and error is None and not self._cancelled(job):
                 todo_item, task = backlog.pop(0)
-                pending[ctx.pool.submit(analyze_segment, task)] = todo_item
+                pending[ctx.pool.apply_async(task)] = todo_item
             if not pending:
                 break
-            done, _ = wait(pending, return_when=FIRST_COMPLETED)
-            for fut in done:
-                t = pending.pop(fut)
-                if fut.cancelled():
-                    continue
-                exc = fut.exception()
-                if exc is not None:
-                    if self._cancelled(job):  # segment interrompu par l'arrêt de l'application
+            for work in wait_ready(pending):
+                t = pending.pop(work)
+                try:
+                    res = work.get()
+                except Exception as exc:  
+                    if self._cancelled(job):
                         continue
                     msg = (f"segment {t.segment_index} ({format_hms(t.start_ms)}–{format_hms(t.end_ms)}) : "
                            f"{exc}")
@@ -512,13 +464,12 @@ class JobManager:
                                                                    "segment": t.segment_index})
                     ctx.writer.run_sync(lambda ss, sid=t.segment_id, m=msg: repo.mark_segment_failed(ss, sid, m))
                     continue
-                res = fut.result()
                 saved = ctx.writer.run_sync(
                     lambda ss, r=res, sid=t.segment_id: repo.save_segment_result(ss, mid, sid, version, r, job.id))
                 if not saved:
                     error = error or "film supprimé pendant l'indexation"
                     continue
-                with self._lock:  # progression réelle, lue par le polling des requêtes
+                with self._lock:
                     job.completed_units += 1
                     job.fingerprints += res.count
                     job.frames_decoded += res.frames_decoded
@@ -527,8 +478,6 @@ class JobManager:
                                                     "pid": res.pid, "elapsed_ms": int(res.wall_s * 1000)})
             if error or self._cancelled(job):
                 backlog.clear()
-                for fut in pending:
-                    fut.cancel()  # n'annule que les segments pas encore démarrés
         with self._lock:
             job.details["compute_s"] = round(time.perf_counter() - t0, 3)
 
@@ -546,11 +495,7 @@ class JobManager:
             else:
                 self._finish(job, "failed", msg)
 
-    # ------------------------------------------------------------ recherche
     def _run_search(self, job: JobState, clip_path: Path, clip_name: str, method: str) -> None:
-        """Exécutée par un thread du pool de recherche.  Le décodage du clip (<= 30 s) est fait par
-        un sous-processus FFmpeg : le thread attend surtout le pipe (GIL relâché) ; on n'attend
-        pas derrière les segments d'indexation en file dans le pool de processus."""
         ctx, s = self.ctx, self.ctx.settings
         timings: dict[str, float] = {}
         t_all = time.perf_counter()
@@ -611,7 +556,7 @@ class JobManager:
             self._search_failed(job, "cancelled", "recherche annulée")
         except (searching.QueryRejected, FFmpegError, ValueError) as exc:
             self._search_failed(job, "failed", str(exc))
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  
             log.exception("recherche en échec", extra={"job_id": job.id})
             self._search_failed(job, "failed", f"erreur inattendue : {exc}")
         finally:
@@ -622,14 +567,13 @@ class JobManager:
             self.ctx.writer.run_sync(lambda ss: repo.save_search(
                 ss, id=job.id, job_id=job.id, status="failed" if state == "failed" else "cancelled",
                 clip_name=job.label[:300], result_json=json.dumps({"error": message})))
-        except Exception:  # noqa: BLE001
+        except Exception:  
             log.exception("persistance de la recherche impossible", extra={"job_id": job.id})
         finally:
             self._finish(job, state, message)
 
-    # ------------------------------------------------------------ benchmark
     def _run_benchmark(self, job: JobState, runner: Callable[[Callable[[dict], None]], dict]) -> None:
-        def publish(update: dict) -> None:  # appelé par le benchmark : mise à jour sous verrou
+        def publish(update: dict) -> None:
             with self._lock:
                 for k in ("stage", "completed_units", "total_units"):
                     if k in update:
@@ -647,6 +591,6 @@ class JobManager:
                 with self._lock:
                     job.details.update({"run_id": result.get("run_id")})
                 self._finish(job, "completed")
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  
             log.exception("benchmark en échec", extra={"job_id": job.id})
             self._finish(job, "failed", str(exc))

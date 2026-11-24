@@ -1,22 +1,10 @@
-"""Indexation d'un film : même logique métier en mode **séquentiel** et en mode **parallèle**.
-
-* ``plan_for`` : découpage déterministe (indépendant du nombre de processus) ;
-* ``build_task`` : description sérialisable d'un segment ;
-* ``index_movie_sync`` : version synchrone utilisée par les scripts, les tests et le benchmark.
-  - séquentiel : ``analyze_segment`` appelée dans une simple boucle (chemin de référence) ;
-  - parallèle : les mêmes ``SegmentTask`` soumises au ``LocalProcessPool``.
-  Le gestionnaire de jobs à threads (``concurrency/job_manager.py``) réutilise exactement
-  ``plan_for``, ``build_task``, ``analyze_segment`` et les fonctions de ``db/repo.py``.
-"""
-
 from __future__ import annotations
 
 import time
-from concurrent.futures import FIRST_COMPLETED, Future, wait
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from app.concurrency.process_pool import LocalProcessPool
+from app.concurrency.process_pool import LocalProcessPool, SegmentWork, wait_ready
 from app.core.settings import Settings
 from app.db import repo
 from app.db.writer import DbWriter
@@ -58,7 +46,6 @@ class IndexReport:
 def index_movie_sync(movie_id: int, video_path: Path, duration_ms: int, settings: Settings,
                      writer: DbWriter, pool: LocalProcessPool | None = None, force: bool = False,
                      job_id: str | None = None) -> IndexReport:
-    """Indexe un film de bout en bout (bloquant).  ``pool=None`` -> mode séquentiel."""
     t0 = time.perf_counter()
     version = settings.index_version
     seg_ms, plans = plan_for(duration_ms, settings)
@@ -76,7 +63,7 @@ def index_movie_sync(movie_id: int, video_path: Path, duration_ms: int, settings
         report.frames_decoded += res.frames_decoded
         report.pids.add(res.pid)
 
-    if pool is None:  # ---------------- séquentiel : une simple boucle
+    if pool is None:
         for seg_id, task in tasks.items():
             try:
                 _save(seg_id, analyze_segment(task))
@@ -84,27 +71,24 @@ def index_movie_sync(movie_id: int, video_path: Path, duration_ms: int, settings
                 errors.append(f"segment {task.segment_index}: {exc}")
                 writer.run_sync(lambda s, sid=seg_id, e=str(exc): repo.mark_segment_failed(s, sid, e))
                 break
-    else:  # ---------------------------- parallèle : mêmes tâches, fenêtre bornée de futures
+    else:
         window = pool.workers * settings.max_inflight_segments_per_worker
         queue = list(tasks.items())
-        pending: dict[Future, int] = {}
+        pending: dict[SegmentWork, int] = {}
         while queue or pending:
             while queue and len(pending) < window and not errors:
                 seg_id, task = queue.pop(0)
-                pending[pool.submit(analyze_segment, task)] = seg_id
+                pending[pool.apply_async(task)] = seg_id
             if not pending:
                 break
-            done, _ = wait(pending, return_when=FIRST_COMPLETED)
-            for fut in done:
-                seg_id = pending.pop(fut)
+            for work in wait_ready(pending):
+                seg_id = pending.pop(work)
                 try:
-                    _save(seg_id, fut.result())
+                    _save(seg_id, work.get())
                 except Exception as exc:  # noqa: BLE001
                     errors.append(f"segment {tasks[seg_id].segment_index}: {exc}")
                     writer.run_sync(lambda s, sid=seg_id, e=str(exc): repo.mark_segment_failed(s, sid, e))
             if errors:
-                for fut in pending:
-                    fut.cancel()  # les segments non démarrés ne seront jamais lancés
                 queue.clear()
 
     if errors:

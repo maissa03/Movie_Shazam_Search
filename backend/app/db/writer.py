@@ -1,29 +1,3 @@
-"""``DbWriter`` : **unique propriétaire des écritures SQLite** (thread dédié + file bornée).
-
-Pourquoi ?
-  SQLite n'accepte qu'un écrivain à la fois.  Plutôt que de laisser plusieurs threads se
-  battre pour le verrou (``database is locked``), toutes les écritures passent par une
-  ``queue.Queue`` bornée consommée par **un seul thread**.  C'est le schéma
-  producteur–consommateur du cours (chapitre threads) :
-
-    producteurs (threads des requêtes HTTP, threads des jobs, scripts)
-          │  submit(fn)  ->  Future
-          ▼
-    queue.Queue(maxsize)  ──►  thread « sqlite-writer »  ──►  une transaction par fn
-
-* ``queue.Queue`` est déjà thread-safe : **aucun Lock supplémentaire** n'est nécessaire.
-* Chaque écriture s'exécute dans **une transaction** (``session.begin()``) : tout ou rien.
-* Arrêt propre : ``close()`` refuse les nouvelles écritures (``threading.Event``), puis
-  place une **sentinelle** en fin de file : comme la file est FIFO, toutes les écritures
-  déjà soumises sont vidées avant l'arrêt, puis ``join()``.  Thread **non daemon** : on ne
-  perd jamais une écriture importante à la fermeture.
-* Les résultats remontent par ``concurrent.futures.Future`` : le thread producteur attend
-  ``future.result()`` (``run_sync``) ou continue sans attendre (``submit``).
-* L'ordre FIFO de la file est l'ordre d'écriture : un producteur qui doit garantir qu'un
-  instantané plus récent n'est jamais écrasé par un plus ancien soumet l'écriture **sous
-  son propre verrou** (voir ``JobManager._persist``).
-"""
-
 from __future__ import annotations
 
 import logging
@@ -54,7 +28,7 @@ class DbWriter:
         self._queue: queue.Queue[Any] = queue.Queue(maxsize=maxsize)
         self._closed = threading.Event()
         self._thread = threading.Thread(target=self._run, name="sqlite-writer", daemon=False)
-        self.completed = 0  # modifié uniquement par le thread écrivain
+        self.completed = 0
 
     def start(self) -> None:
         self._thread.start()
@@ -64,9 +38,6 @@ class DbWriter:
         return self._thread.is_alive()
 
     def submit(self, fn: Callable[[Session], T], *, block: bool = False, timeout: float = 30.0) -> Future[T]:
-        """Ajoute une écriture à la file.  ``block=False`` (défaut) ne bloque jamais l'appelant :
-        si la file est pleine, ``WriterBusy`` est levée (l'API répond 503 au lieu de geler).
-        Avec ``block=True``, l'appelant attend au plus ``timeout`` secondes qu'une place se libère."""
         if self._closed.is_set():
             raise WriterClosed("la base est en cours de fermeture")
         fut: Future[T] = Future()
@@ -80,7 +51,6 @@ class DbWriter:
         return fut
 
     def run_sync(self, fn: Callable[[Session], T], timeout: float | None = 120.0) -> T:
-        """Soumet l'écriture puis attend son résultat (exécutée par le thread écrivain)."""
         return self.submit(fn, block=True).result(timeout=timeout)
 
     def _run(self) -> None:
@@ -96,7 +66,7 @@ class DbWriter:
                     with self._session_factory() as session, session.begin():
                         result = fn(session)
                     fut.set_result(result)
-                except BaseException as exc:  # l'erreur est transmise à l'appelant
+                except BaseException as exc:
                     log.debug("écriture échouée: %s", exc)
                     fut.set_exception(exc)
                 self.completed += 1
@@ -104,7 +74,6 @@ class DbWriter:
                 self._queue.task_done()
 
     def close(self, timeout: float | None = 60.0) -> None:
-        """Refuse les nouvelles écritures, vide la file puis arrête le thread."""
         if self._closed.is_set():
             return
         self._closed.set()

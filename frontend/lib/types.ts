@@ -1,4 +1,3 @@
-// Types alignés sur les schémas Pydantic du backend (backend/app/api/schemas.py).
 
 export type MovieStatus = "pending" | "indexing" | "indexed" | "failed" | "cancelled";
 export type JobState = "queued" | "running" | "completed" | "failed" | "cancelled";

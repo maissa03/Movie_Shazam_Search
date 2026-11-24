@@ -53,11 +53,7 @@ COLORMAPS = [
 STYLES = ["texture", "geometric", "stripes", "particles"]
 
 
-# --------------------------------------------------------------------------- #
-# Rendu des plans                                                              #
-# --------------------------------------------------------------------------- #
 def _smooth_noise(rng: np.random.Generator, h: int, w: int, octaves: int = 3) -> np.ndarray:
-    """Bruit lisse multi-octaves (valeurs 0..255, uint8)."""
     acc = np.zeros((h, w), np.float32)
     for o in range(octaves):
         gh = int(3 * 2**o + rng.integers(0, 3))
@@ -76,7 +72,6 @@ def _bright_color(rng: np.random.Generator) -> tuple[int, int, int]:
 
 
 def _bounce(x0: float, v: float, t: float, lo: float, hi: float) -> float:
-    """Mouvement rectiligne avec rebonds entre lo et hi (onde triangulaire)."""
     span = max(hi - lo, 1e-6)
     p = (x0 - lo + v * t) % (2 * span)
     return lo + (p if p <= span else 2 * span - p)
@@ -133,7 +128,6 @@ def _random_shapes(rng: np.random.Generator, w: int, h: int, n: int) -> list[Sha
 
 
 class ShotRenderer:
-    """Un plan : fonction déterministe t_local -> image BGR."""
 
     def __init__(self, style: str, seed: int, w: int, h: int, dim: float = 1.0):
         self.style, self.w, self.h, self.dim = style, w, h, dim
@@ -159,7 +153,7 @@ class ShotRenderer:
             g = (g - g.min()) / max(float(g.max() - g.min()), 1e-6)
             blend = c1[None, None, :] * g[..., None] + c2[None, None, :] * (1 - g[..., None])
             self.background = blend.astype(np.uint8)
-            for _ in range(int(rng.integers(4, 9))):  # gros blocs statiques
+            for _ in range(int(rng.integers(4, 9))):
                 x1, y1 = int(rng.uniform(0, w)), int(rng.uniform(0, h))
                 x2, y2 = x1 + int(rng.uniform(0.1, 0.4) * w), y1 + int(rng.uniform(0.1, 0.4) * h)
                 cv2.rectangle(self.background, (x1, y1), (x2, y2), _bright_color(rng), -1)
@@ -216,7 +210,6 @@ class ShotRenderer:
             for s in self.shapes:
                 s.draw(img, t)
             return img
-        # particles
         img = self.background.copy()
         st = self.stars
         xs = (st[:, 0] + st[:, 2] * t) % w
@@ -229,7 +222,6 @@ class ShotRenderer:
 
 
 def _render_logo(t: float, w: int, h: int) -> np.ndarray:
-    """Logo de studio commun à TOUS les films (contenu répété volontairement)."""
     img = np.zeros((h, w, 3), np.uint8)
     alpha = min(1.0, t / 0.5)
     s = w / 1280
@@ -248,7 +240,6 @@ def _render_logo(t: float, w: int, h: int) -> np.ndarray:
 
 
 def _render_credits(t: float, w: int, h: int, lines: list[str]) -> np.ndarray:
-    """Générique de fin défilant (texte blanc sur noir)."""
     img = np.zeros((h, w, 3), np.uint8)
     s = w / 1280
     line_h = int(70 * s)
@@ -263,17 +254,14 @@ def _render_credits(t: float, w: int, h: int, lines: list[str]) -> np.ndarray:
     return img
 
 
-# --------------------------------------------------------------------------- #
-# Films : timeline = liste d'intervalles [start, end) -> rendu                 #
-# --------------------------------------------------------------------------- #
 @dataclass
 class Interval:
     start: float
     end: float
-    kind: str  # black | logo | shot | credits | repeat | borrow
+    kind: str
     style: str = ""
     seed: int = 0
-    ref: str = ""        # identifiant du plan répété / clé du film emprunté
+    ref: str = ""
     ref_start: float = 0.0
     dim: float = 1.0
 
@@ -315,7 +303,7 @@ class Film:
         for a, b in zip(fixed, fixed[1:]):
             timeline.append(a)
             t = a.end
-            while b.start - t > 1e-9:  # remplir le trou par des plans aléatoires 3–7 s
+            while b.start - t > 1e-9:
                 d = float(rng.uniform(3.0, 7.0))
                 if b.start - (t + d) < 2.0:
                     d = b.start - t
@@ -351,25 +339,22 @@ class Film:
             return _render_credits(local, self.w, self.h, self.credits)
         if iv.kind == "shot":
             return self._renderer(iv.style, iv.seed, iv.dim).frame(local)
-        if iv.kind == "repeat":  # rejoue exactement un plan précédent du même film
+        if iv.kind == "repeat":
             src = next(x for x in self.timeline if x.ref == iv.ref and x.kind == "shot")
             return self._renderer(src.style, src.seed, src.dim).frame(local)
-        if iv.kind == "borrow":  # passage copié depuis un autre film
+        if iv.kind == "borrow":
             return self.films[iv.ref].frame_at(iv.ref_start + local)
         raise ValueError(iv.kind)
 
 
-# --------------------------------------------------------------------------- #
-# Profils de corpus                                                            #
-# --------------------------------------------------------------------------- #
 @dataclass
 class ClipSpec:
     split: str
     film: str
     start: float
     duration: float
-    transform: str  # clean | recompress | downscale | fps15 | fps30 | combo
-    expected: str   # match | no_match | ambiguous
+    transform: str
+    expected: str
     note: str = ""
     alternatives: list[tuple[str, float]] = field(default_factory=list)
 
@@ -378,21 +363,20 @@ def demo_profile() -> tuple[list[FilmSpec], list[ClipSpec], dict]:
     films = [
         FilmSpec("A", "A_ocean_de_verre", "Océan de Verre", 2024, 120.0, 11, True, anchors=[
             Interval(30.0, 36.0, "shot", style="texture", seed=11_777, ref="A_rep"),
-            Interval(90.0, 96.0, "repeat", ref="A_rep"),  # scène répétée (flashback)
+            Interval(90.0, 96.0, "repeat", ref="A_rep"),
         ]),
         FilmSpec("B", "B_foret_electrique", "Forêt Électrique", 2023, 90.0, 22, True),
         FilmSpec("C", "C_nuit_polaire", "Nuit Polaire", 2025, 75.0, 33, True, anchors=[
-            Interval(24.0, 32.0, "shot", style="dark", seed=33_555, dim=0.16),  # scène sombre
+            Interval(24.0, 32.0, "shot", style="dark", seed=33_555, dim=0.16),
         ]),
         FilmSpec("D", "D_ville_fractale", "Ville Fractale", 2026, 60.0, 44, True, anchors=[
-            Interval(20.0, 28.0, "borrow", ref="B", ref_start=40.0),  # passage partagé avec B
+            Interval(20.0, 28.0, "borrow", ref="B", ref_start=40.0),
         ]),
         FilmSpec("E", "E_inconnu_validation", "Inconnu (validation)", 2026, 30.0, 55, False),
         FilmSpec("F", "F_inconnu_test", "Inconnu (test)", 2026, 30.0, 66, False),
     ]
     V, T = "validation", "test"
     clips = [
-        # ---- validation : sert à calibrer les seuils ----
         ClipSpec(V, "A", 7.0, 10, "clean", "match"),
         ClipSpec(V, "A", 63.3, 10, "recompress", "match", "début non aligné"),
         ClipSpec(V, "B", 12.7, 5, "clean", "match", "clip court 5 s"),
@@ -406,7 +390,6 @@ def demo_profile() -> tuple[list[FilmSpec], list[ClipSpec], dict]:
         ClipSpec(V, "E", 0.5, 10, "clean", "no_match", "film non indexé (contient le logo commun)"),
         ClipSpec(V, "E", 18.2, 5, "recompress", "no_match", "film non indexé"),
         ClipSpec(V, "E", 9.0, 15, "downscale", "no_match", "film non indexé"),
-        # ---- test final : jamais utilisé pour régler les seuils ----
         ClipSpec(T, "A", 0.0, 10, "clean", "match", "début du film (noir + logo commun)"),
         ClipSpec(T, "A", 44.6, 10, "clean", "match", "traverse une frontière de segment (45 s)"),
         ClipSpec(T, "A", 105.0, 15, "clean", "match", "fin du film (générique)"),
@@ -430,7 +413,6 @@ def demo_profile() -> tuple[list[FilmSpec], list[ClipSpec], dict]:
 
 
 def mini_profile() -> tuple[list[FilmSpec], list[ClipSpec], dict]:
-    """Petit corpus rapide pour les tests unitaires/intégration."""
     films = [
         FilmSpec("A", "A_mini", "Mini A", 2026, 36.0, 101, True),
         FilmSpec("B", "B_mini", "Mini B", 2026, 30.0, 202, True, anchors=[
@@ -463,9 +445,6 @@ TRANSFORMS: dict[str, dict] = {
 }
 
 
-# --------------------------------------------------------------------------- #
-# Encodage                                                                     #
-# --------------------------------------------------------------------------- #
 def render_film(film: Film, out: Path, fps: int, crf: int) -> None:
     ffmpeg = find_binary("ffmpeg")
     w, h = film.w, film.h

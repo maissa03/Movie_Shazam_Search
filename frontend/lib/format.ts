@@ -1,4 +1,3 @@
-// Formats lisibles (français) pour les durées, tailles, dates et scores.
 
 export function hms(ms: number | null | undefined, withTenths = false): string {
   if (ms == null || Number.isNaN(ms)) return "—";

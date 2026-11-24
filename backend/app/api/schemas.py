@@ -1,5 +1,3 @@
-"""Schémas Pydantic (validation des entrées / documentation automatique sur ``/docs``)."""
-
 from __future__ import annotations
 
 from datetime import UTC, datetime
@@ -9,8 +7,6 @@ from pydantic import BaseModel, Field, PlainSerializer
 
 from app.db.models import Movie, Segment
 
-# Les dates sont stockées en UTC « naïf » : on les sérialise explicitement avec le suffixe Z,
-# sinon le navigateur les interpréterait comme des heures locales (décalage d'une heure ou plus).
 UtcDateTime = Annotated[
     datetime, PlainSerializer(lambda d: d.replace(tzinfo=UTC).isoformat().replace("+00:00", "Z"), return_type=str)
 ]

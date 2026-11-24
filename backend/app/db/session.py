@@ -1,13 +1,3 @@
-"""Moteur SQLAlchemy + sessions.
-
-* Une connexion SQLite n'est jamais partagée arbitrairement : chaque opération ouvre une
-  ``Session`` courte (``with session_factory() as s``) qui emprunte une connexion au pool.
-* ``journal_mode=WAL`` : les lectures (API, recherche) ne bloquent pas l'écrivain et
-  inversement ; il n'y a qu'**un seul écrivain** (``DbWriter``), donc pas de contention en écriture.
-* ``foreign_keys=ON`` : suppressions en cascade cohérentes (film -> segments -> empreintes -> bandes).
-* Les processus du pool n'ouvrent **jamais** la base : ils renvoient des résultats compacts.
-"""
-
 from __future__ import annotations
 
 from pathlib import Path
@@ -40,7 +30,6 @@ def make_engine(db_path: Path) -> Engine:
 
 
 def init_db(engine: Engine) -> None:
-    """Crée les tables manquantes (initialisation de schéma documentée, idempotente)."""
     Base.metadata.create_all(engine)
 
 

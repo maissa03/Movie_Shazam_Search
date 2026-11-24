@@ -18,7 +18,7 @@ def make_engine(db_path: Path) -> Engine:
     )
 
     @event.listens_for(engine, "connect")
-    def _pragmas(dbapi_conn, _record) -> None:  # noqa: ANN001
+    def _pragmas(dbapi_conn, _record) -> None:  
         cur = dbapi_conn.cursor()
         cur.execute("PRAGMA journal_mode=WAL")
         cur.execute("PRAGMA synchronous=NORMAL")

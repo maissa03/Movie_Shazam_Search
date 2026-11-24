@@ -66,7 +66,7 @@ def health(request: Request) -> HealthOut:
     db_ok, db_err = True, None
     try:
         ctx.read(lambda ss: ss.execute(text("SELECT 1")).scalar())
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  
         db_ok, db_err = False, str(exc)
     try:
         ff = {"available": True, "ffmpeg": find_binary("ffmpeg"), "ffprobe": find_binary("ffprobe"),
@@ -95,7 +95,7 @@ def health(request: Request) -> HealthOut:
 def stats(request: Request) -> dict:
     ctx = _ctx(request)
 
-    def _read(s):  # noqa: ANN001, ANN202
+    def _read(s):  
         data = repo.library_stats(s)
         data["recent_searches"] = [
             {"id": x.id, "status": x.status, "clip_name": x.clip_name, "score": x.score, "start_ms": x.start_ms,
@@ -129,6 +129,7 @@ def import_movie(request: Request, response: Response,
         raise HTTPException(503, "l'application s'arrête")
     try:
         library.safe_extension(file.filename or "")
+        # Verif before temp
         ctx.io.call(library.check_disk_space, s.temp_dir, file.size or 0)
         staged = ctx.io.call(library.stage_stream, file.file, file.filename or "video", s, s.max_upload_bytes)
     except UploadTooLarge as exc:
@@ -148,6 +149,7 @@ def import_movie(request: Request, response: Response,
         staged.temp_path.unlink(missing_ok=True)
     if created or not movie.thumbnail_name:
         try:
+            #thumbnail
             name = ctx.io.call(library.make_thumbnail, movie, s)
             movie = ctx.writer.run_sync(lambda ss: repo.update_movie(ss, movie.id, thumbnail_name=name))
         except FFmpegError:
@@ -167,7 +169,7 @@ def import_movie(request: Request, response: Response,
                      message=message)
 
 
-def _get_movie_or_404(ctx, movie_id: int):  # noqa: ANN001, ANN202
+def _get_movie_or_404(ctx, movie_id: int):  
     movie = ctx.read(lambda s: repo.get_movie(s, movie_id))
     if movie is None:
         raise HTTPException(404, "film introuvable")

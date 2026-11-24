@@ -67,7 +67,7 @@ def startup(settings: Settings) -> AppContext:
     engine = make_engine(settings.database_path)
     init_db(engine)
     sf = make_session_factory(engine)
-    # Thread unique d'écriture SQLite (DbWriter hérite de threading.Thread) : start() lance DbWriter.run().
+    # Thread d'écriture SQLite
     writer = DbWriter(sf)
     writer.start()
     pool: LocalProcessPool | None = None

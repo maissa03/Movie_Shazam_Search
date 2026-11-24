@@ -14,8 +14,7 @@ from app.video.segmentation import SegmentPlan
 
 BAND_MIN_INFORMATIVENESS = 2.0
 MOVIE_STATUSES = ("pending", "indexing", "indexed", "failed", "cancelled")
-# Types de jobs gérés par l'application. Les anciennes lignes kind="benchmark" restent dans SQLite
-# mais ne sont plus lues ni modifiées.
+
 JOB_KINDS = ("index", "search")
 
 

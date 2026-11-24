@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 T = TypeVar("T")
 log = logging.getLogger("movieshazam.db.writer")
-_STOP = object()  # sentinelle : déposée dans la file par close() pour terminer run()
+_STOP = object()  
 
 
 class WriterClosed(RuntimeError):

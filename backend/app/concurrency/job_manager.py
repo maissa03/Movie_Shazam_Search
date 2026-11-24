@@ -241,7 +241,7 @@ class JobManager:
         try:
             if fut is not None:
                 fut.result(timeout=120)
-        except Exception:  # noqa: BLE001
+        except Exception:  
             log.exception("persistance du job impossible", extra={"job_id": job.id})
         finally:
             job.done.set()

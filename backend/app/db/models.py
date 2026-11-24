@@ -140,6 +140,3 @@ class Search(Base):
     result_json: Mapped[str] = mapped_column(Text, default="{}")
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
 
-
-# La table « benchmarks » des anciennes bases n'est plus mappée : create_all() ne la crée plus
-# et ne la supprime pas non plus (aucune migration destructive, les mesures déjà enregistrées restent).
